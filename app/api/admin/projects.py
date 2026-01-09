@@ -7,7 +7,7 @@ from datetime import date
 from app.db.session import SessionLocal
 from app.models.project import Project
 from app.schemas.project import ProjectCreate, ProjectResponse
-
+from app.schemas.project import ProjectMemberDetail
 # --- IMPORTS FOR PROJECT OWNERS (MANAGERS) ---
 from app.models.project_owners import ProjectOwner
 from app.schemas.project_owners import OwnerAssign, OwnerResponse
@@ -312,18 +312,33 @@ def assign_member(
 
 
 # --- LIST MEMBERS ---
-@router.get("/{project_id}/members", response_model=list[MemberResponse])
+
+@router.get("/{project_id}/members", response_model=list[ProjectMemberDetail])
 def list_project_members(
-    project_id: UUID, 
+    project_id: UUID,
     db: Session = Depends(get_db)
 ):
-    members = db.query(ProjectMember).filter(
+    """
+    Returns a list of all users assigned to this project, 
+    including their Name, Email, Role, and Active Status.
+    """
+    # Join ProjectMember table with User table to get the names
+    results = db.query(ProjectMember, User).join(
+        User, ProjectMember.user_id == User.id
+    ).filter(
         ProjectMember.project_id == project_id
     ).all()
+
+    members_list = []
+    for member, user in results:
+        members_list.append(ProjectMemberDetail(
+            user_id=user.id,
+            name=user.name,
+            email=user.email,
+            work_role=member.work_role,
+            is_active=member.is_active,
+            assigned_from=member.assigned_from,
+            assigned_to=member.assigned_to
+        ))
     
-    results = []
-    for m in members:
-        m.user_name = m.user.name if m.user else "Unknown"
-        results.append(m)
-        
-    return results
+    return members_list
