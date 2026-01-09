@@ -35,3 +35,6 @@ app.include_router(shifts.router)
 from app.api.admin import user_daily
 
 app.include_router(user_daily.router)
+from app.api.dashboard import user_history
+
+app.include_router(user_history.router)
