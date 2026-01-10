@@ -152,4 +152,27 @@ def approve_session(
     if session.project:
         session.project_name = session.project.name
         
-    return session
+    return 
+
+# --- 5. GET CURRENT ACTIVE SESSION (For Home Page Logic) ---
+@router.get("/current", response_model=Optional[TimeHistoryResponse])
+def get_current_active_session(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Checks if the user has a session running (Clock Out is NULL).
+    Returns the session details if yes, or null if no.
+    """
+    active_session = db.query(TimeHistory).filter(
+        TimeHistory.user_id == current_user.id,
+        TimeHistory.clock_out_at == None
+    ).first()
+
+    if active_session:
+        # Manually attach project name so the UI can display "Working on: Project Alpha"
+        if active_session.project:
+            active_session.project_name = active_session.project.name
+        return active_session
+    
+    return None
