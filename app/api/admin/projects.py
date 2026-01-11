@@ -29,11 +29,13 @@ def get_db():
 # ==========================================
 #              CORE PROJECT APIs
 # ==========================================
-
+from app.core.dependencies import get_current_user
 # --- GET LIST REQUEST (With Search, Status & Date Interval) ---
 @router.get("/", response_model=list[ProjectResponse])
 def list_projects(
     db: Session = Depends(get_db),
+    # 1. ADD THIS LINE: We need to know WHO is asking to find their role
+    current_user: User = Depends(get_current_user), 
     search: Optional[str] = None,
     is_active: Optional[bool] = None,
     start_date_from: Optional[date] = None,
@@ -41,7 +43,7 @@ def list_projects(
     skip: int = 0,
     limit: int = 100
 ):
-    # 1. Validate Date Logic (Prevent "From > To")
+    # (Validation Logic remains the same)
     if start_date_from and start_date_to and start_date_from > start_date_to:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -69,8 +71,23 @@ def list_projects(
         query = query.filter(Project.start_date <= start_date_to)
 
     projects = query.offset(skip).limit(limit).all()
-    return projects
 
+    # --- 2. NEW LOGIC: INJECT USER ROLES ---
+    # Fetch all active project memberships for this user
+    my_memberships = db.query(ProjectMember).filter(
+        ProjectMember.user_id == current_user.id,
+        ProjectMember.is_active == True
+    ).all()
+    
+    # Create a lookup map: {project_id: "Role Name"}
+    role_map = {m.project_id: m.work_role for m in my_memberships}
+
+    # Attach the specific role to each project in the list
+    for p in projects:
+        # If user is assigned, use their role. If not, default to "Contributor"
+        p.current_user_role = role_map.get(p.id, "N/A")
+
+    return projects
 # --- GET SINGLE PROJECT REQUEST ---
 @router.get("/{project_id}", response_model=ProjectResponse)
 def get_project(

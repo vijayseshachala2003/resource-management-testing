@@ -9,6 +9,7 @@ class GlobalStatsResponse(BaseModel):
     total_users: int
     active_projects: int
     total_hours_today: float
+    active_project_names: list[str]
 
 # 2. For the "Live Pulse" (Who is working right now?)
 class LiveWorkerResponse(BaseModel):
