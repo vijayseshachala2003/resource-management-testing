@@ -1,0 +1,28 @@
+name: Mirror master to testing
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "Khiyanat-Deori"
+          git config user.email "deorikhiyanat@gmail.com"
+
+      - name: Force mirror testing with master
+        run: |
+          git fetch origin
+          git checkout testing
+          git reset --hard origin/master
+          git push origin testing --force
