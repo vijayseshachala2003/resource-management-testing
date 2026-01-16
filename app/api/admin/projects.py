@@ -16,7 +16,10 @@ from app.models.user import User
 # --- IMPORTS FOR PROJECT MEMBERS (WORKERS) ---
 from app.models.project_members import ProjectMember
 from app.schemas.project_members import MemberAssign, MemberResponse
+from pydantic import BaseModel
 
+class MemberRoleUpdate(BaseModel):
+    work_role: str
 router = APIRouter(prefix="/admin/projects", tags=["Admin - Projects"])
 
 def get_db():
@@ -29,11 +32,13 @@ def get_db():
 # ==========================================
 #              CORE PROJECT APIs
 # ==========================================
-
+from app.core.dependencies import get_current_user
 # --- GET LIST REQUEST (With Search, Status & Date Interval) ---
 @router.get("/", response_model=list[ProjectResponse])
 def list_projects(
     db: Session = Depends(get_db),
+    # 1. ADD THIS LINE: We need to know WHO is asking to find their role
+    current_user: User = Depends(get_current_user), 
     search: Optional[str] = None,
     is_active: Optional[bool] = None,
     start_date_from: Optional[date] = None,
@@ -41,7 +46,7 @@ def list_projects(
     skip: int = 0,
     limit: int = 100
 ):
-    # 1. Validate Date Logic (Prevent "From > To")
+    # (Validation Logic remains the same)
     if start_date_from and start_date_to and start_date_from > start_date_to:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -69,8 +74,23 @@ def list_projects(
         query = query.filter(Project.start_date <= start_date_to)
 
     projects = query.offset(skip).limit(limit).all()
-    return projects
 
+    # --- 2. NEW LOGIC: INJECT USER ROLES ---
+    # Fetch all active project memberships for this user
+    my_memberships = db.query(ProjectMember).filter(
+        ProjectMember.user_id == current_user.id,
+        ProjectMember.is_active == True
+    ).all()
+    
+    # Create a lookup map: {project_id: "Role Name"}
+    role_map = {m.project_id: m.work_role for m in my_memberships}
+
+    # Attach the specific role to each project in the list
+    for p in projects:
+        # If user is assigned, use their role. If not, default to "Contributor"
+        p.current_user_role = role_map.get(p.id, "N/A")
+
+    return projects
 # --- GET SINGLE PROJECT REQUEST ---
 @router.get("/{project_id}", response_model=ProjectResponse)
 def get_project(
@@ -342,3 +362,61 @@ def list_project_members(
         ))
     
     return members_list
+
+# --- REMOVE MEMBER (WORKER) ---
+@router.delete("/{project_id}/members/{user_id}")
+def remove_project_member(
+    project_id: UUID, 
+    user_id: UUID, 
+    db: Session = Depends(get_db)
+):
+    # 1. Find the specific assignment
+    member_record = db.query(ProjectMember).filter(
+        ProjectMember.project_id == project_id,
+        ProjectMember.user_id == user_id
+    ).first()
+
+    if not member_record:
+        raise HTTPException(status_code=404, detail="Member assignment not found")
+
+    # 2. Delete the record
+    db.delete(member_record)
+    db.commit()
+
+    return {"message": "Member removed successfully"}
+
+
+@router.delete("/{project_id}/members/{user_id}")
+def remove_project_member(project_id: UUID, user_id: UUID, db: Session = Depends(get_db)):
+    member = db.query(ProjectMember).filter(
+        ProjectMember.project_id == project_id, 
+        ProjectMember.user_id == user_id
+    ).first()
+    
+    if not member: 
+        raise HTTPException(status_code=404, detail="Member assignment not found")
+    
+    db.delete(member)
+    db.commit()
+    return {"message": "Member removed"}
+
+# 3. ADD THIS TO THE BOTTOM (To update a worker's role)
+@router.put("/{project_id}/members/{user_id}")
+def update_project_member_role(
+    project_id: UUID, 
+    user_id: UUID, 
+    payload: MemberRoleUpdate, 
+    db: Session = Depends(get_db)
+):
+    member = db.query(ProjectMember).filter(
+        ProjectMember.project_id == project_id, 
+        ProjectMember.user_id == user_id
+    ).first()
+    
+    if not member: 
+        raise HTTPException(status_code=404, detail="Member assignment not found")
+    
+    member.work_role = payload.work_role
+    db.commit()
+    db.refresh(member)
+    return member

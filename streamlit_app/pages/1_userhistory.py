@@ -9,7 +9,7 @@ with st.spinner("Loading history..."):
     try:
         data = api_request(
             "GET",
-            "/metrics/daily/me",
+            "/me",
             token=token
         )
 

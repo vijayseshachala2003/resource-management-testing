@@ -1,0 +1,36 @@
+The below is our latest folder structure.
+.
+├── app
+│   ├── api
+│   │   ├── admin
+│   │   ├── dashboard
+│   │   ├── history
+│   │   └── time
+│   ├── core
+│   ├── db
+│   ├── middlewares
+│   ├── models
+│   ├── schemas
+│   └── services
+├── streamlit_app
+│   └── pages
+└── venv
+    ├── Include
+    ├── Lib
+    │   └── site-packages
+    ├── Scripts
+    ├── etc
+    │   └── jupyter
+    └── share
+        └── jupyter
+
+1) Backend
+bash : pip install -r requirements.txt
+bash : python -m venv venv
+bash : venv/Scripts/activate
+venv : python -m uvicorn app.main:app --reload ( make sure you are not in app, but in resource_management)
+
+2) Frontend
+bash : pip install streamlit pandas openpyxl requests
+bash : venv/Scripts/activate
+venv : streamlit_app run app.py (ensure you are in streamlit_app folder)

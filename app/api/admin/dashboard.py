@@ -43,14 +43,18 @@ def get_global_stats(db: Session = Depends(get_db)):
     ).scalar() or 0  # .scalar() handles the case where no work happened yet
     
     total_hours = round(today_minutes / 60, 1)
+    active_projects_query = db.query(Project.name).filter(Project.is_active == True).all()
+    
+    
 
-    # 4. Estimate Revenue (Mock Calculation: $50/hr)
-   
+  
+    active_names = [row.name for row in active_projects_query]
 
     return GlobalStatsResponse(
         total_users=total_users,
         active_projects=active_projects,
         total_hours_today=total_hours,
+        active_project_names=active_names
        
     )
 

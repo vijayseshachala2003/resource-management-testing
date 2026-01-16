@@ -15,11 +15,13 @@ class ProjectResponse(ProjectCreate):
     id: UUID
     created_at: datetime
     updated_at: Optional[datetime]
+    
+    # --- NEW FIELD FOR DASHBOARD LOGIC ---
+    current_user_role: Optional[str] = "Contributor"
 
     class Config:
         from_attributes = True
 
-# --- ADD THIS NEW CLASS BELOW ---
 class ProjectMemberDetail(BaseModel):
     user_id: UUID
     name: str
