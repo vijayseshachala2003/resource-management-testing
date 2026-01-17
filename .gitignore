@@ -24,3 +24,7 @@ build/
 # OS files
 .DS_Store
 Thumbs.db
+
+#ignore test csv files and scripts
+*.csv
+*.sh
