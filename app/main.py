@@ -43,3 +43,6 @@ app.include_router(admin_dashboard.router)
 from app.api.dashboard import user_history
 
 app.include_router(user_history.router)
+
+from app.api import attendance_daily
+app.include_router(attendance_daily.router)
