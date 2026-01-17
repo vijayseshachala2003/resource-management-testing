@@ -46,3 +46,7 @@ app.include_router(user_history.router)
 
 from app.api import attendance_daily
 app.include_router(attendance_daily.router)
+# For bulk uploads from admin/bulk_uploads.py
+from app.api.admin.bulk_uploads import router
+
+app.include_router(router)
