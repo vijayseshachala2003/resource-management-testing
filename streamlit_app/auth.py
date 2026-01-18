@@ -11,7 +11,7 @@ def login_ui():
         try:
             data = api_request(
                 "POST",
-                "/auth/login",
+                # "/auth/login",
                 json={"email": email, "password": password},
             )
             st.session_state["token"] = data["access_token"]

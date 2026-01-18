@@ -1,7 +1,7 @@
 # app/api/admin/bulk_uploads.py
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
-from app.core.security import hash_password
+# from app.core.security import hash_password
 from app.db.session import SessionLocal
 from app.models.project import Project
 from app.models.user import User, UserRole

@@ -8,7 +8,16 @@ from typing import List, Optional
 from uuid import UUID
 #import hashlib
 
-router = APIRouter(prefix="/admin/users", tags=["Admin - Users"])
+from fastapi import APIRouter, Depends
+from app.core.dependencies import get_current_user
+from app.models.user import User
+
+router = APIRouter(
+    prefix="/admin/users",
+    tags=["Admin Users"],
+    dependencies=[Depends(get_current_user)],
+)
+
 
 def get_db():
     db = SessionLocal()
@@ -69,7 +78,7 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     user = User(
         email=payload.email,
         name=payload.name,
-        password_hash=hash_password(payload.password),
+        # password_hash=hash_password(payload.password),
         role=UserRole(payload.role),
         work_role=payload.work_role,
         doj=payload.doj,
@@ -168,4 +177,4 @@ def deactivate_user(
 
     return {"message": "User deactivated successfully"}
 
-from app.core.security import hash_password
+# from app.core.security import hash_password
