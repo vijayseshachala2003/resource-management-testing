@@ -68,9 +68,30 @@ if 'user' not in st.session_state or not st.session_state.get('user'):
         st.session_state['user'] = user_profile
 
 # Display Header
-user_name = st.session_state.get('user', {}).get('name', 'User')
+user = st.session_state.get("user")
+
+user_name = "User"  # default fallback
+
+if user:
+    # 1️⃣ Supabase user (highest priority)
+    if hasattr(user, "user_metadata") and user.user_metadata:
+        user_name = (
+            user.user_metadata.get("name")
+            or user.user_metadata.get("full_name")
+            or user.email
+        )
+
+    # 2️⃣ Backend User model
+    elif hasattr(user, "name") and user.name:
+        user_name = user.name
+
+    # 3️⃣ Email fallback
+    elif hasattr(user, "email"):
+        user_name = user.email
+
 st.markdown(f"# 🚀 Hi, {user_name}!")
 st.markdown("---")
+
 
 # --- 2. CHECK STATUS (Persistence) ---
 current_session = authenticated_request("GET", "/time/current")

@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 # from app.middlewares.auth import auth_middleware
 from app.api.admin import users, projects
 from app.api.admin import shifts
-from app.api import auth
 from app.api.admin import projects_daily
 from dotenv import load_dotenv
 from app.api import analytics

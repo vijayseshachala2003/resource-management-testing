@@ -1,21 +1,16 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
-from app.db.session import SessionLocal, get_db
+# from sqlalchemy import or_
+from app.db.session import SessionLocal
 from app.models.user import User, UserRole
-from app.schemas.user import UserCreate, UserResponse
+from app.schemas.user import UserCreate, UserResponse, UserUpdate, UserQualityUpdate, UserSystemUpdate
 from typing import List, Optional
 from uuid import UUID
 #import hashlib
 
-from fastapi import APIRouter, Depends
-from app.core.dependencies import get_current_user
-from app.models.user import User
-
 router = APIRouter(
     prefix="/admin/users",
     tags=["Admin Users"],
-    dependencies=[Depends(get_current_user)],
 )
 
 
@@ -68,8 +63,7 @@ def list_users(
 
 @router.post("/", response_model=UserResponse)
 def create_user(payload: UserCreate, db: Session = Depends(get_db)):
-    existing_user = db.query(User).filter(User.email == payload.email).first()
-    if existing_user:
+    if db.query(User).filter(User.email == payload.email).first():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="User with this email already exists",
@@ -83,6 +77,8 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
         work_role=payload.work_role,
         doj=payload.doj,
         default_shift_id=payload.default_shift_id,
+        rpm_user_id=payload.rpm_user_id,
+        soul_id=payload.soul_id,
     )
     
 
