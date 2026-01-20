@@ -1,7 +1,6 @@
 # app/api/admin/bulk_uploads.py
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
-# from app.core.security import hash_password
 from app.db.session import SessionLocal
 from app.models.project import Project
 from app.models.user import User, UserRole
@@ -19,7 +18,7 @@ def get_db():
 
 # For now kept the format for writing a CSV
 # email, name, role, password, date_of_joining, soul_id, work_role
-# if password field is empty then default pass 12346 will be hashed and inserted
+# passwork field should only contain 12345, if password field is empty then default pass 12345 will be inserted
 USER_REQUIRED_FIELDS = {
         "email",
         "name",
@@ -30,7 +29,7 @@ USER_REQUIRED_FIELDS = {
     }
 
 # For now kept the format for writing the project CSV
-# code, name, is_active, start_date
+# code, name, is_active, start_date, end_date
 PROJECT_REQUIRED_FIELDS = {
     "code",
     "name",
@@ -38,6 +37,37 @@ PROJECT_REQUIRED_FIELDS = {
     "start_date",
     "end_date"
 }
+
+
+@router.post("/list/users")
+async def list_users(
+    active_only: bool = False,
+    db: Session = Depends(get_db)
+):
+    query = db.query(User)
+
+    if active_only and active_only is True:
+        query = query.filter(User.is_active == True)
+    
+    users = query.all()
+    results = []
+
+    for user in users:
+        results.append({
+            "email": user.email,
+            "name": user.name,
+            "role": user.role,
+            "is_active": user.is_active,
+            "doj": user.doj,
+            "rpm_user_id": user.rpm_user_id,
+            "soul_id": user.soul_id,
+            "work_role": user.work_role
+        })
+
+    return {
+        "count": len(results),
+        "items": results
+    }
 
 @router.post("/users")
 async def bulk_upload_users(
@@ -90,6 +120,11 @@ async def bulk_upload_users(
             if not value or not value.strip():
                 error_list.append(
                     f"Line {line_no}: '{field}' is missing"
+                )
+                break
+            elif field == "password" and row[field].strip() != "" and row[field].strip() != DEFAULT_PASS:
+                error_list.append(
+                    f"Line {line_no}: '{field}' should have only value of 12345"
                 )
                 break
         else:
@@ -172,6 +207,11 @@ async def bulk_upload_projects(
             if field != "end_date" and field != "is_active" and (not row.get(field) or not row[field].strip()):
                 error_list.append(
                     f"Line {line_no}: '{field}' is missing"
+                )
+                break
+            if field == "end_date" and row["end_date"] and row["end_date"] > row["start_date"]:
+                error_list.append(
+                    f"Line {line_no}: 'end_date' can't be greater than 'start_date'"
                 )
                 break
         else:
