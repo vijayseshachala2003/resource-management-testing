@@ -162,7 +162,11 @@ with cols[1]:
             rcol, acol = st.columns([5, 1])
             with rcol:
                 st.markdown(f"### {it.get('request_type','Request')} <span class='badge {badge_class}'>{status}</span>", unsafe_allow_html=True)
-                st.markdown(f"<div class='small'>Project: <b>{proj_map.get(it.get("project_id"), "—")}</b> • Submitted: {submitted_display}</div>", unsafe_allow_html=True)
+                st.markdown(
+    f"<div class='small'>Project: <b>{proj_map.get(it.get('project_id'), '—')}</b> • Submitted: {submitted_display}</div>",
+    unsafe_allow_html=True
+)
+
                 st.write(f"**Period:** {it.get('start_date') or '—'} → {it.get('end_date') or '—'}")
                 if it.get('reason'):
                     with st.expander("Reason"):

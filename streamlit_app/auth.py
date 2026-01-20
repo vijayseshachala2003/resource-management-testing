@@ -1,5 +1,6 @@
 import streamlit as st
-from api import api_request
+from supabase_client import supabase
+
 
 def login_ui():
     st.title("Login")
@@ -9,23 +10,37 @@ def login_ui():
 
     if st.button("Login"):
         try:
-            data = api_request(
-                "POST",
-                # "/auth/login",
-                json={"email": email, "password": password},
-            )
-            st.session_state["token"] = data["access_token"]
-            st.session_state["user_id"] = data.get("user_id")
-            st.session_state["user_name"] = data.get("user_name")
-            st.session_state["user_email"] = data.get("user_email")
-            st.session_state["user_role"] = data.get("user_role")
+            res = supabase.auth.sign_in_with_password({
+                "email": email,
+                "password": password,
+            })
+
+            if not res.session:
+                st.error("Login failed")
+                return
+
+            # Store Supabase token
+            st.session_state["token"] = res.session.access_token
+            st.session_state["user"] = {
+    "id": res.user.id,
+    "email": res.user.email,
+    "name": res.user.user_metadata.get("name"),
+    "role": res.user.user_metadata.get("role", "USER"),
+}
+
+            st.session_state["user_email"] = res.user.email
+
             st.success("Logged in successfully")
             st.rerun()
+
         except Exception as e:
             st.error(str(e))
 
 
 def require_auth():
+    """
+    Call this at the top of every protected page.
+    """
     if "token" not in st.session_state:
         login_ui()
         st.stop()

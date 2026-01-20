@@ -24,7 +24,6 @@ USER_REQUIRED_FIELDS = {
         "email",
         "name",
         "role",
-        "password",
         "date_of_joining",
         "soul_id",
         "work_role",
@@ -39,8 +38,6 @@ PROJECT_REQUIRED_FIELDS = {
     "start_date",
     "end_date"
 }
-
-DEFAULT_PASS = "12345"
 
 @router.post("/users")
 async def bulk_upload_users(
@@ -89,13 +86,14 @@ async def bulk_upload_users(
 
         # Empty field check
         for field in USER_REQUIRED_FIELDS:
-            if field != "password" and (not row.get(field) or not row[field].strip()):
+            value = row.get(field)
+            if not value or not value.strip():
                 error_list.append(
                     f"Line {line_no}: '{field}' is missing"
                 )
                 break
         else:
-            # Duplicate check
+            # Duplicate email check
             if email in emails_from_db:
                 error_list.append(
                     f"Line {line_no}: email '{email}' already exists"
@@ -107,7 +105,6 @@ async def bulk_upload_users(
                 User(
                     email=email,
                     name=row["name"].strip(),
-                    password_hash=hash_password(row["password"] if row["password"] else DEFAULT_PASS),
                     role=UserRole(row["role"]),
                     soul_id=row["soul_id"].strip(),
                     work_role=row["work_role"].strip(),
