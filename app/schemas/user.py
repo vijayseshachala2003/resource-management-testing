@@ -8,6 +8,10 @@ class UserRole(str, Enum):
     ADMIN = "ADMIN"
     USER = "USER"
 
+class WorkRole(str, Enum):
+    CONTRACTOR = "CONTRACTOR"
+    EMPLOYEE = "EMPLOYEE"
+
 class UserCreate(BaseModel):
     """
     Used by ADMIN to create a user record in backend DB.

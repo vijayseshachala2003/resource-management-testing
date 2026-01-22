@@ -94,7 +94,7 @@ def get_live_workers(db: Session = Depends(get_db)):
 @router.get("/pending-approvals", response_model=list[PendingApprovalResponse])
 def get_pending_approvals(
     db: Session = Depends(get_db),
-    # current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Returns completed sessions that are waiting for manager approval.

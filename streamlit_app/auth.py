@@ -22,11 +22,11 @@ def login_ui():
             # Store Supabase token
             st.session_state["token"] = res.session.access_token
             st.session_state["user"] = {
-    "id": res.user.id,
-    "email": res.user.email,
-    "name": res.user.user_metadata.get("name"),
-    "role": res.user.user_metadata.get("role", "USER"),
-}
+                "id": res.user.id,
+                "email": res.user.email,
+                "name": res.user.user_metadata.get("name"),
+                "role": res.user.user_metadata.get("role", "USER"),
+            }
 
             st.session_state["user_email"] = res.user.email
 

@@ -122,12 +122,12 @@ with tab1:
                 else:
                     st.success("File attached.")
                     if st.button("Upload"):
-                        response = authenticated_request("POST", "/admin/bulk_uploads/projects", uploaded_file)
+                        response = authenticated_request("POST", "/admin/bulk_uploads/projects", uploaded_file=uploaded_file)
                         
                         if not response:
                             st.error("Error uploading file")
                         else:
-                            st.success("Inserted: " + response["inserted"])
+                            st.success(f"Inserted: {response["inserted"]}")
                             error = response["errors"]
                             error = "Error: None" if len(error) == 0 else "Errors: " + ','.join(error)
                             st.warning(error)

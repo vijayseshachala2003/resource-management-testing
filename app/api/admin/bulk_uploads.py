@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
+from app.core.dependencies import get_current_user
 from app.models.project import Project
 from app.models.user import User, UserRole
 import csv
@@ -17,8 +18,7 @@ def get_db():
         db.close()
 
 # For now kept the format for writing a CSV
-# email, name, role, password, date_of_joining, soul_id, work_role
-# passwork field should only contain 12345, if password field is empty then default pass 12345 will be inserted
+# email, name, role, date_of_joining, soul_id, work_role
 USER_REQUIRED_FIELDS = {
         "email",
         "name",
@@ -38,11 +38,11 @@ PROJECT_REQUIRED_FIELDS = {
     "end_date"
 }
 
-
 @router.post("/list/users")
 async def list_users(
     active_only: bool = False,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     query = db.query(User)
 
@@ -72,7 +72,8 @@ async def list_users(
 @router.post("/users")
 async def bulk_upload_users(
     file: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user)
 ):
     if not file.filename or not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Upload a valid .csv file")
@@ -83,13 +84,23 @@ async def bulk_upload_users(
 
     if not rows:
         raise HTTPException(status_code=400, detail="CSV file is empty")
+   
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV headers / column names are missing")
 
     # Validate headers
-    if not USER_REQUIRED_FIELDS.issubset(reader.fieldnames):
+    if not (USER_REQUIRED_FIELDS == set(reader.fieldnames)):
         missing = USER_REQUIRED_FIELDS - set(reader.fieldnames)
+        extra = set(reader.fieldnames) - USER_REQUIRED_FIELDS
+         
+        detail = {
+            "missing": 0 if not missing else f"count: {len(missing)}; {', '.join(missing)}",
+            "extra": 0 if not extra else f"count: {len(extra)}; {', '.join(extra)}"
+        }
+
         raise HTTPException(
             status_code=400,
-            detail=f"Missing columns: {', '.join(missing)}"
+            detail=detail
         )
 
     # Extract emails
@@ -111,20 +122,22 @@ async def bulk_upload_users(
     error_list = []
 
     for line_no, row in enumerate(rows, start=2):
+        # Check the size of the row: should have exactly 6 entries
+        if not (6 == len(row)):
+            error_list.append(
+                f"Line {line_no}: 'row' should have exactly 6 values"
+            )
+            continue
+
         # Normalize
         email = row["email"].strip().lower()
-
+        
         # Empty field check
         for field in USER_REQUIRED_FIELDS:
             value = row.get(field)
             if not value or not value.strip():
                 error_list.append(
-                    f"Line {line_no}: '{field}' is missing"
-                )
-                break
-            elif field == "password" and row[field].strip() != "" and row[field].strip() != DEFAULT_PASS:
-                error_list.append(
-                    f"Line {line_no}: '{field}' should have only value of 12345"
+                    f"Line {line_no}: '{field}' is missing or 'row' has less than 6 values"
                 )
                 break
         else:
@@ -160,7 +173,8 @@ async def bulk_upload_users(
 @router.post("/projects")
 async def bulk_upload_projects(
     file: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
 ):
     if not file.filename or not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Upload a valid .csv file")
@@ -171,13 +185,22 @@ async def bulk_upload_projects(
 
     if not rows:
         raise HTTPException(status_code=400, detail="CSV file is empty")
+    
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV headers / column names are missing")
 
-    # Validate headers
-    if not PROJECT_REQUIRED_FIELDS.issubset(reader.fieldnames):
+    if not (PROJECT_REQUIRED_FIELDS == set(reader.fieldnames)):
         missing = PROJECT_REQUIRED_FIELDS - set(reader.fieldnames)
+        extra = set(reader.fieldnames) - PROJECT_REQUIRED_FIELDS
+         
+        detail = {
+            "missing": 0 if not missing else f"count: {len(missing)}; {', '.join(missing)}",
+            "extra": 0 if not extra else f"count: {len(extra)}; {', '.join(extra)}"
+        }
+
         raise HTTPException(
             status_code=400,
-            detail=f"Missing columns: {', '.join(missing)}"
+            detail=detail
         )
 
     # Extract codes
@@ -199,6 +222,14 @@ async def bulk_upload_projects(
     error_list = []
 
     for line_no, row in enumerate(rows, start=2):
+        # Check the size of the row: should have exactly 6 entries
+        print(len(row))
+        if not (5 == len(row)):
+            error_list.append(
+                f"Line {line_no}: 'row' should have exactly 6 values"
+            )
+            continue
+
         # Normalize
         code = row["code"].strip().lower()
 
@@ -206,7 +237,7 @@ async def bulk_upload_projects(
         for field in PROJECT_REQUIRED_FIELDS:
             if field != "end_date" and field != "is_active" and (not row.get(field) or not row[field].strip()):
                 error_list.append(
-                    f"Line {line_no}: '{field}' is missing"
+                    f"Line {line_no}: '{field}' is missing or 'row' has less than 5 values"
                 )
                 break
             if field == "end_date" and row["end_date"] and row["end_date"] > row["start_date"]:

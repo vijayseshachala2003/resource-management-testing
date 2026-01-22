@@ -8,27 +8,37 @@ API_BASE_URL = "http://localhost:8000"
 PAGE_SIZE = 10
 
 # --- HELPER FUNCTIONS ---
-def authenticated_request(method, endpoint, uploaded_file):
+def authenticated_request(method, endpoint, data=None, file=None):
     # For authentication
-    if not uploaded_file:
-        st.error("No file is attached")
+    token = st.session_state.get("token")
+    if not token:
+        st.error("🔒 You are not logged in.")
+        st.stop()
+    
+    headers = {"Authorization": f"Bearer {token}"}
+
+    if file and data:
+        st.error("Can't send both json and file payload")
         return None
     
     url = f"{API_BASE_URL}{endpoint}"
 
     try:
-        files = {
-            "file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)
-        }
-        
         response = None
-        with st.spinner("Uploading..."):
-            response = requests.request(method, url, files=files)
-        
+
+        if file:
+            files = {
+                "file": (file.name, file.getvalue(), file.type)
+            }
+            with st.spinner("Uploading..."):
+                response = requests.request(method, url, headers=headers, files=files)
+        else:
+            response = requests.request(method, url, headers=headers, data=data)
+
         if response.status_code >= 400:
             st.error(f"Error: {response.status_code}, {response.text}")
-        else:
-            return response.json()
+            return None
+        return response.json()
 
     except Exception as e:
         st.error(f"Network error: '{e}'")
@@ -65,17 +75,10 @@ with st.expander("Fetch Users", expanded=True):
             }
 
             with st.spinner("Fetching users..."):
-                res = requests.post(
-                    f"{API_BASE_URL}/admin/bulk_uploads/list/users",
-                    json=payload,
-                    timeout=5
-                )
-
-                # HTTP errors (4xx / 5xx)
-                res.raise_for_status()
-
-                # JSON decode safety
-                data = res.json()
+                data = authenticated_request("POST", "/admin/bulk_uploads/list/users", data=payload)
+                
+                if not data:
+                    st.error("Error occurred")
 
                 if not isinstance(data, dict) or "items" not in data:
                     st.error("Invalid response format from server")
@@ -95,8 +98,6 @@ with st.expander("Fetch Users", expanded=True):
                     st.info("No users found.")
                 else:
                     st.success(f"Fetched {len(st.session_state["items"])} users")
-
-                    
 
         except ConnectionError:
             st.error("Cannot reach server. Is the backend running?")
@@ -196,7 +197,7 @@ with st.expander("Bulk upload users (in .csv)"):
         else:
             st.success("File attached.")
             if st.button("Upload"):
-                response = authenticated_request("POST", "/admin/bulk_uploads/users", uploaded_file)
+                response = authenticated_request("POST", "/admin/bulk_uploads/users", file=uploaded_file)
                 
                 if not response:
                     st.error("Error uploading file")
