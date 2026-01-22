@@ -63,4 +63,8 @@ app.include_router(analytics.router)
 app.include_router(reports.router)
 
 from app.api.admin import router as admin_router
+from app.api.admin import role_drilldown
+
 app.include_router(admin_router)
+app.include_router(role_drilldown.router)
+
