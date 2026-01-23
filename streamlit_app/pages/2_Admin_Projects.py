@@ -123,7 +123,7 @@ with tab1:
                         if not response:
                             st.error("Error uploading file")
                         else:
-                            st.success(f"Inserted: {response["inserted"]}")
+                            st.success(f"Inserted: {response['inserted']}")
                             error = response["errors"]
                             error = "Error: None" if len(error) == 0 else "Errors: " + ','.join(error)
                             st.warning(error)
