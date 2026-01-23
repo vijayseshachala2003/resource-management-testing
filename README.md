@@ -91,4 +91,46 @@ Role	Permissions
 ADMIN	Full access
 USER	Self dashboard & history
 
+## Front end code for Approval management
+- Run the script independently by running the following
+```
+cd attendance_preview 
+streamlit run attendance_preview.py ```
+```
+What can Approval management features
+Perfect! I've completed the attendance management system following the workflows you provided. Here's what's been implemented:
 
+## 🎯 Complete Feature Set:
+
+### **User Features:**
+1. **Attendance Tab:**
+   - Clock in/out with WFH/Onsite mode
+   - Live duration tracking
+   - View attendance logs with status filters (All/Pending/Approved/Rejected)
+   - See shift timings and week-offs
+
+2. **Leave Tab:**
+   - Apply for Full Day or Half Day leaves
+   - Date range selection (2 paid days, rest unpaid)
+   - Upload proof (optional)
+   - Complete leave history with filters
+   - Leave balance summary
+
+### **Admin Features:**
+1. **Project Approvals Tab (Attendance):**
+   - View all attendance logs with comprehensive filters (Project, User, Status, Date)
+   - **Individual approval**: Select and approve/reject single entries with notes
+   - **Bulk approval**: Approve/reject all pending entries at once
+   - View complete attendance history
+
+2. **Leave Approvals Tab:**
+   - Filter by Project, User, Status, and Leave Type
+   - Approve/reject leave requests with optional admin reason
+   - View all leave requests with complete details
+
+3. **Settings Tab:**
+   - Set default shift timings (start/end time)
+   - Configure week-offs (multi-select days)
+   - Save and apply globally
+
+All features follow the Keka-style workflow with proper status tracking, filtering, and approval mechanisms! 🚀
