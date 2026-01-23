@@ -97,7 +97,7 @@ with st.expander("Fetch Users", expanded=True):
                 if not items:
                     st.info("No users found.")
                 else:
-                    st.success(f"Fetched {len(st.session_state["items"])} users")
+                    st.success(f"Fetched {len(st.session_state['items'])} users")
 
         except ConnectionError:
             st.error("Cannot reach server. Is the backend running?")
@@ -202,7 +202,7 @@ with st.expander("Bulk upload users (in .csv)"):
                 if not response:
                     st.error("Error uploading file")
                 else:
-                    st.success(f"Inserted: {response["inserted"]}")
+                    st.success(f"Inserted: {response['inserted']}")
                     error = response["errors"]
                     error = "Error: None" if len(error) == 0 else "Errors: " + ', '.join(error)
                     st.warning(error)
