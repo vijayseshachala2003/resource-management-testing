@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 import time
-from datetime import datetime
+from datetime import datetime, date
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="My Dashboard", layout="wide")
@@ -30,7 +30,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- HELPER FUNCTIONS ---
-def api_request(method, endpoint, token=None, json=None):
+def api_request(method, endpoint, token=None, json=None, params=None):
     headers = {}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -40,7 +40,8 @@ def api_request(method, endpoint, token=None, json=None):
             method=method,
             url=f"{API_BASE_URL}{endpoint}",
             headers=headers,
-            json=json
+            json=json,
+            params=params,
         )
         if response.status_code >= 400:
             return None
@@ -49,12 +50,50 @@ def api_request(method, endpoint, token=None, json=None):
         st.error(f"Connection Error: {e}")
         return None
 
-def authenticated_request(method, endpoint, data=None):
+def authenticated_request(method, endpoint, data=None, params=None):
     token = st.session_state.get("token")
     if not token:
         st.error("🔒 You are not logged in.")
         st.stop()
-    return api_request(method, endpoint, token=token, json=data)
+    return api_request(method, endpoint, token=token, json=data, params=params)
+
+# ---------------------------------------------------------
+# HELPERS: TIME DISPLAY
+# ---------------------------------------------------------
+def format_duration_hhmmss(total_seconds: int) -> str:
+    if total_seconds <= 0:
+        return "-"
+
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+def calculate_hours_worked(clock_in, clock_out, minutes_worked):
+    if not clock_in or not clock_out:
+        return "-"
+
+    if minutes_worked is not None and minutes_worked > 0:
+        total_seconds = int(minutes_worked * 60)
+        return format_duration_hhmmss(total_seconds)
+
+    try:
+        ci = datetime.fromisoformat(clock_in.replace("Z", ""))
+        co = datetime.fromisoformat(clock_out.replace("Z", ""))
+        total_seconds = int((co - ci).total_seconds())
+        return format_duration_hhmmss(total_seconds)
+    except Exception:
+        return "-"
+
+def split_datetime(ts):
+    if not ts:
+        return "-", "-"
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", ""))
+        return dt.date().isoformat(), dt.strftime("%I:%M %p")
+    except Exception:
+        return "-", "-"
 
 # ---------------------------------------------------------
 # DASHBOARD LOGIC
@@ -90,6 +129,8 @@ if user:
         user_name = user.email
 
 st.markdown(f"# 🚀 Hi, {user_name}!")
+current_time_str = datetime.now().strftime("%H:%M:%S")
+st.markdown(f"## 🕒 {current_time_str}")
 st.markdown("---")
 
 
@@ -106,11 +147,7 @@ with st.container(border=True):
         
         if current_session:
             # ACTIVE STATE (Red)
-            try:
-                start_time = datetime.fromisoformat(current_session['clock_in_at'])
-                display_time = start_time.strftime("%I:%M %p")
-            except:
-                display_time = "Unknown"
+            _, display_time = split_datetime(current_session.get("clock_in_at"))
             
             st.markdown(f"""
                 <div class="status-card" style="border-left: 5px solid #ff4b4b;">
@@ -178,9 +215,11 @@ with st.container(border=True):
             if st.button("🚀 START WORK SESSION", type="primary", use_container_width=True):
                 if selected_proj_name:
                     proj_id = project_map[selected_proj_name]['id']
+                    clock_in_at = datetime.now().isoformat()
                     resp = authenticated_request("POST", "/time/clock-in", data={
                         "project_id": proj_id,
-                        "work_role": role_val
+                        "work_role": role_val,
+                        "clock_in_at": clock_in_at,
                     })
                     if resp:
                         st.balloons()
@@ -189,36 +228,87 @@ with st.container(border=True):
                 else:
                     st.warning("⚠️ Please select a project first.")
 
+# --- 3B. TODAY'S CLOCK IN / OUT DETAILS ---
+st.subheader("🗓️ Today's Sessions")
+today_str = date.today().isoformat()
+today_sessions = authenticated_request(
+    "GET",
+    "/time/history",
+    params={
+        "start_date": today_str,
+        "end_date": today_str,
+    },
+) or []
+
+if not today_sessions:
+    st.info("No clock-in / clock-out sessions found for today.")
+else:
+    # Sort latest first (clock_out_at if present, else clock_in_at)
+    def session_sort_key(session):
+        ts = session.get("clock_out_at") or session.get("clock_in_at")
+        if not ts:
+            return datetime.min
+        return datetime.fromisoformat(ts.replace("Z", ""))
+
+    today_sessions.sort(key=session_sort_key, reverse=True)
+
+    for session in today_sessions:
+        with st.container(border=True):
+            cols = st.columns(6)
+
+            project_name = session.get("project_name", "Unknown")
+            clock_in_date, clock_in_time = split_datetime(session.get("clock_in_at"))
+            clock_out_date, clock_out_time = split_datetime(session.get("clock_out_at"))
+            hours_worked = calculate_hours_worked(
+                session.get("clock_in_at"),
+                session.get("clock_out_at"),
+                session.get("minutes_worked"),
+            )
+
+            cols[0].markdown(f"**Project**\n\n{project_name}")
+            cols[1].markdown(f"**Work Role**\n\n{session.get('work_role')}")
+            cols[2].markdown(f"**Clock In**\n\n{clock_in_time}")
+            cols[3].markdown(f"**Clock Out**\n\n{clock_out_time}")
+            cols[4].markdown(f"**Hours Worked**\n\n{hours_worked}")
+            cols[5].markdown(
+                f"**Tasks Completed**\n\n{session.get('tasks_completed', 0)}"
+            )
+
 # --- 4. POPUP: CLOCK OUT FORM ---
+@st.dialog("📝 Submit Timesheet")
+def clock_out_dialog():
+    c_pop1, c_pop2 = st.columns([1, 2])
+
+    with c_pop1:
+        tasks = st.number_input("Tasks Completed", min_value=0, step=1, key="clockout_tasks")
+
+    with c_pop2:
+        notes = st.text_area(
+            "Session Notes",
+            placeholder="Briefly describe what you did...",
+            height=100,
+            key="clockout_notes",
+        )
+
+    st.write("")
+    c_confirm, c_cancel = st.columns(2)
+
+    with c_confirm:
+        if st.button("✅ Confirm Submission", use_container_width=True, type="primary"):
+            resp = authenticated_request("PUT", "/time/clock-out", data={
+                "tasks_completed": tasks,
+                "notes": notes,
+            })
+            if resp:
+                st.success("✅ Saved! Great work today.")
+                st.session_state['show_clockout_popup'] = False
+                time.sleep(1.5)
+                st.rerun()
+
+    with c_cancel:
+        if st.button("❌ Cancel", use_container_width=True):
+            st.session_state['show_clockout_popup'] = False
+            st.rerun()
+
 if st.session_state.get('show_clockout_popup'):
-    st.markdown("---")
-    st.markdown("### 📝 Submit Timesheet")
-    
-    with st.container(border=True):
-        c_pop1, c_pop2 = st.columns([1, 2])
-        
-        with c_pop1:
-            tasks = st.number_input("Tasks Completed", min_value=0, step=1)
-        
-        with c_pop2:
-            notes = st.text_area("Session Notes", placeholder="Briefly describe what you did...", height=100)
-        
-        st.write("")
-        c_confirm, c_cancel = st.columns(2)
-        
-        with c_confirm:
-            if st.button("✅ Confirm Submission", use_container_width=True, type="primary"):
-                resp = authenticated_request("PUT", "/time/clock-out", data={
-                    "tasks_completed": tasks, 
-                    "notes": notes
-                })
-                if resp:
-                    st.success("✅ Saved! Great work today.")
-                    st.session_state['show_clockout_popup'] = False
-                    time.sleep(1.5)
-                    st.rerun()
-        
-        with c_cancel:
-             if st.button("❌ Cancel", use_container_width=True):
-                 st.session_state['show_clockout_popup'] = False
-                 st.rerun()
+    clock_out_dialog()

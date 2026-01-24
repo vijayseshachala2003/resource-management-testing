@@ -7,6 +7,7 @@ from typing import Optional
 class ClockInRequest(BaseModel):
     project_id: UUID
     work_role: str  # Must match your Enum (e.g., "ANNOTATION")
+    clock_in_at: Optional[datetime] = None
 
 # 2. Clock Out Request
 class ClockOutRequest(BaseModel):

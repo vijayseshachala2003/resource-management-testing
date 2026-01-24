@@ -36,15 +36,27 @@ st.title("📋 User History")
 st.markdown("### 🔍 Filters")
 col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 0.5])
 
+# Fetch data first to populate project/role dropdowns
+all_history = authenticated_request("GET", "/time/history") or []
+
+# Default date = last day the user worked (latest sheet_date)
+default_date = date.today()
+if all_history:
+    try:
+        df_all = pd.DataFrame(all_history)
+        if "sheet_date" in df_all.columns:
+            df_all["sheet_date"] = pd.to_datetime(df_all["sheet_date"], errors="coerce").dt.date
+            last_worked = df_all["sheet_date"].dropna().max()
+            if last_worked:
+                default_date = last_worked
+    except Exception:
+        pass
+
 with col1:
-    date_from = st.date_input("📅 Date From", value=date.today() - timedelta(days=30))
+    date_from = st.date_input("📅 Date From", value=default_date)
 
 with col2:
-    date_to = st.date_input("📅 Date To", value=date.today())
-
-# Fetch data first to populate project/role dropdowns
-all_history = authenticated_request("GET", "/time/history")
-
+    date_to = st.date_input("📅 Date To", value=default_date)
 # Get unique projects and roles for dropdown
 projects_list = ["All Projects"]
 roles_list = ["All Roles"]

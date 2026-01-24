@@ -43,11 +43,12 @@ def clock_in(
 
     # Create new session
     # Note: sheet_date defaults to today, status defaults to 'PENDING'
+    clock_in_at = payload.clock_in_at or datetime.now()
     new_session = TimeHistory(
         user_id=current_user.id,
         project_id=payload.project_id,
         work_role=payload.work_role,
-        clock_in_at=datetime.now(),
+        clock_in_at=clock_in_at,
         sheet_date=date.today(),
         tasks_completed=0,
         status="PENDING" ,
