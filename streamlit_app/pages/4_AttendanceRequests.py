@@ -129,8 +129,8 @@ with col_left:
         req_type_upper = str(req_type).upper().replace("-", "_") if req_type else ""  # Handle HALF-DAY -> HALF_DAY
         req_status_upper = str(req_status).upper() if req_status else ""
         
-        # Count LEAVE, FULL_DAY, and HALF_DAY as holidays
-        is_holiday_request = req_type_upper in ["LEAVE", "FULL_DAY", "HALF_DAY", "FULL-DAY", "HALF-DAY"]
+        # Count SICK_LEAVE, FULL_DAY, and HALF_DAY as holidays
+        is_holiday_request = req_type_upper in ["SICK_LEAVE", "FULL_DAY", "HALF_DAY", "FULL-DAY", "HALF-DAY"]
         is_approved = req_status_upper == "APPROVED"
         
         if is_holiday_request and is_approved:
@@ -180,7 +180,7 @@ with col_left:
                         # Half day counts as 0.5
                         days_count = 0.5
                     else:
-                        # Full day (LEAVE or FULL_DAY)
+                        # Full day (SICK_LEAVE or FULL_DAY)
                         days_count = calc_days(start_d, end_d)
                     
                     # Check if overlaps with current year
@@ -222,7 +222,79 @@ with col_left:
                 # Skip invalid dates
                 continue
     
-    # Display holiday counters (format with .5 for half days)
+    # Calculate leave balance for current month
+    monthly_free_leaves = 2.0
+    leaves_used_this_month = 0.0
+    
+    for req in items:
+        req_type_check = req.get("request_type", "")
+        req_status = req.get("status", "")
+        req_type_upper = str(req_type_check).upper().replace("-", "_") if req_type_check else ""
+        req_status_upper = str(req_status).upper() if req_status else ""
+        
+        # Count SICK_LEAVE, FULL_DAY, and HALF_DAY as leaves
+        is_leave_request = req_type_upper in ["SICK_LEAVE", "FULL_DAY", "HALF_DAY", "FULL-DAY", "HALF-DAY"]
+        is_approved = req_status_upper == "APPROVED"
+        
+        if is_leave_request and is_approved:
+            try:
+                start_date_str = req.get("start_date", "")
+                end_date_str = req.get("end_date", "")
+                
+                start_d = None
+                end_d = None
+                
+                if isinstance(start_date_str, date):
+                    start_d = start_date_str
+                elif isinstance(start_date_str, str):
+                    try:
+                        if "T" in start_date_str:
+                            start_d = datetime.fromisoformat(start_date_str.split("T")[0]).date()
+                        else:
+                            start_d = datetime.fromisoformat(start_date_str).date()
+                    except:
+                        try:
+                            start_d = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+                        except:
+                            pass
+                
+                if isinstance(end_date_str, date):
+                    end_d = end_date_str
+                elif isinstance(end_date_str, str):
+                    try:
+                        if "T" in end_date_str:
+                            end_d = datetime.fromisoformat(end_date_str.split("T")[0]).date()
+                        else:
+                            end_d = datetime.fromisoformat(end_date_str).date()
+                    except:
+                        try:
+                            end_d = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+                        except:
+                            pass
+                
+                if start_d and end_d:
+                    # Check if overlaps with current month
+                    month_start_date = date(current_year, current_month, 1)
+                    if current_month == 12:
+                        month_end_date = date(current_year + 1, 1, 1) - timedelta(days=1)
+                    else:
+                        month_end_date = date(current_year, current_month + 1, 1) - timedelta(days=1)
+                    
+                    if start_d <= month_end_date and end_d >= month_start_date:
+                        if req_type_upper in ["HALF_DAY", "HALF-DAY"]:
+                            if month_start_date <= start_d <= month_end_date:
+                                leaves_used_this_month += 0.5
+                        else:
+                            overlap_start = max(start_d, month_start_date)
+                            overlap_end = min(end_d, month_end_date)
+                            if overlap_start <= overlap_end:
+                                leaves_used_this_month += calc_days(overlap_start, overlap_end)
+            except:
+                continue
+    
+    remaining_leaves = monthly_free_leaves - leaves_used_this_month
+    
+    # Display holiday counters in first row
     holiday_col1, holiday_col2 = st.columns(2)
     with holiday_col1:
         year_display = f"{holidays_year:.1f}" if holidays_year % 1 != 0 else f"{int(holidays_year)}"
@@ -231,6 +303,28 @@ with col_left:
         month_name = current_date.strftime("%B")
         month_display = f"{holidays_month:.1f}" if holidays_month % 1 != 0 else f"{int(holidays_month)}"
         st.metric("Holidays This Month", f"{month_display} days", help=f"Approved leave days in {month_name} {current_year} (HALF-DAY = 0.5 days)")
+    
+    st.markdown("---")
+    
+    # Display leave balance in separate section
+    st.markdown("### 💼 Leave Balance")
+    leave_col1, leave_col2 = st.columns(2)
+    with leave_col1:
+        st.metric(
+            "Leaves Used This Month", 
+            f"{leaves_used_this_month:.1f} days",
+            help="Approved leave days in current month"
+        )
+    with leave_col2:
+        remaining_display = f"{remaining_leaves:.1f}" if remaining_leaves % 1 != 0 else f"{int(remaining_leaves)}"
+        delta_color = "normal" if remaining_leaves >= 0 else "inverse"
+        st.metric(
+            "Remaining Leaves", 
+            f"{remaining_display} days",
+            delta=f"{monthly_free_leaves:.1f} free/month",
+            delta_color=delta_color,
+            help="2 free leaves per month. Half-day = 0.5 days"
+        )
     
     st.markdown("---")
     
@@ -277,77 +371,88 @@ with col_left:
         proj_name_to_id = {p["name"]: p["id"] for p in projects}
         proj_names = ["— none —"] + list(proj_name_to_id.keys())
         
-        # Request Type Selection
-        req_type = st.selectbox(
-            "Request Type",
-            ["LEAVE", "FULL-DAY", "HALF-DAY", "WFH", "REGULARIZATION", "SHIFT_CHANGE", "OTHER"],
-            help="Select the type of attendance request"
-        )
-        
-        # Project Selection
-        project = st.selectbox("Project", proj_names)
-        project_id = proj_name_to_id.get(project) if project != "— none —" else None
-        
-        # Date Range
-        col_a, col_b = st.columns(2)
-        with col_a:
-            start_date = st.date_input("Start Date", value=date.today(), min_value=date.today(), key="req_start_date")
-        with col_b:
-            # For HALF-DAY, end_date should be same as start_date
-            if req_type == "HALF-DAY":
-                end_date = start_date
-                st.date_input("End Date", value=start_date, disabled=True, key="req_end_date_disabled")
-            else:
-                end_date = st.date_input("End Date", value=date.today(), min_value=start_date, key="req_end_date")
-        
-        # Time inputs (optional)
-        col_c, col_d = st.columns(2)
-        with col_c:
-            start_time = st.time_input("Start Time (optional)", value=None, key="req_start_time")
-        with col_d:
-            end_time = st.time_input("End Time (optional)", value=None, key="req_end_time")
-        
-        # Days calculation for LEAVE and FULL-DAY types
-        if req_type in ["LEAVE", "FULL-DAY"]:
-            days = calc_days(start_date, end_date)
-            if days > 2:
-                st.warning(f"⚠️ {days} days leave will be marked as **Non-Paid Leave**")
-            else:
-                st.info(f"ℹ️ {days} day(s) - Paid Leave")
-        elif req_type == "HALF-DAY":
-            st.info("ℹ️ 0.5 day - Half Day Leave")
-        
-        # Reason
-        reason = st.text_area("Reason", height=100, placeholder="Enter reason for request...", key="req_reason")
-        
-        # Submit Button
-        if st.button("✉️ Submit Request", type="primary", use_container_width=True, key="submit_request"):
-            if not reason.strip():
-                st.error("❌ Reason is required.")
-            elif req_type != "HALF-DAY" and end_date < start_date:
-                st.error("❌ End date must be >= start date.")
-            else:
-                # For HALF-DAY, ensure end_date equals start_date
+        # Use form to enable automatic clearing
+        with st.form("attendance_request_form", clear_on_submit=True):
+            # Request Type Selection
+            req_type = st.selectbox(
+                "Request Type",
+                ["SICK_LEAVE", "FULL-DAY", "HALF-DAY", "WFH", "REGULARIZATION", "SHIFT_CHANGE", "OTHER"],
+                help="Select the type of attendance request"
+            )
+            
+            # Project Selection
+            project = st.selectbox("Project", proj_names)
+            project_id = proj_name_to_id.get(project) if project != "— none —" else None
+            
+            # Date Range (no default values)
+            col_a, col_b = st.columns(2)
+            with col_a:
+                start_date = st.date_input("Start Date", value=None, min_value=date.today())
+            with col_b:
+                # For HALF-DAY, end_date should be same as start_date
                 if req_type == "HALF-DAY":
-                    end_date = start_date
-                
-                payload = {
-                    "project_id": project_id,
-                    "request_type": req_type,
-                    "start_date": start_date.isoformat(),
-                    "end_date": end_date.isoformat(),
-                    "start_time": start_time.isoformat() if start_time else None,
-                    "end_time": end_time.isoformat() if end_time else None,
-                    "reason": reason.strip(),
-                    "attachment_url": None
-                }
-                result = create_request(token, payload)
-                if result:
-                    st.success("✅ Request submitted successfully!")
-                    st.balloons()
-                    # Invalidate cache and rerun
-                    invalidate_cache()
-                    st.rerun()
+                    if start_date:
+                        end_date = start_date
+                        st.date_input("End Date", value=start_date, disabled=True)
+                    else:
+                        end_date = None
+                        st.date_input("End Date", value=None, disabled=True)
+                else:
+                    if start_date:
+                        end_date = st.date_input("End Date", value=None, min_value=start_date)
+                    else:
+                        end_date = None
+                        st.date_input("End Date", value=None, min_value=None)
+            
+            # Days calculation for SICK_LEAVE and FULL-DAY types
+            if start_date and end_date:
+                if req_type in ["SICK_LEAVE", "FULL-DAY"]:
+                    days = calc_days(start_date, end_date)
+                    if days > 2:
+                        st.warning(f"⚠️ {days} days leave will be marked as **Non-Paid Leave**")
+                    else:
+                        st.info(f"ℹ️ {days} day(s) - Paid Leave")
+                elif req_type == "HALF-DAY":
+                    st.info("ℹ️ 0.5 day - Half Day Leave")
+            
+            # Reason
+            reason = st.text_area("Reason", height=100, placeholder="Enter reason for request...")
+            
+            # Submit Button
+            submitted = st.form_submit_button("✉️ Submit Request", type="primary", use_container_width=True)
+            
+            if submitted:
+                if not reason.strip():
+                    st.error("❌ Reason is required.")
+                elif not start_date:
+                    st.error("❌ Start date is required.")
+                elif not end_date:
+                    st.error("❌ End date is required.")
+                elif req_type != "HALF-DAY" and end_date < start_date:
+                    st.error("❌ End date must be >= start date.")
+                else:
+                    # For HALF-DAY, ensure end_date equals start_date
+                    if req_type == "HALF-DAY":
+                        end_date = start_date
+                    
+                    payload = {
+                        "project_id": project_id,
+                        "request_type": req_type,
+                        "start_date": start_date.isoformat(),
+                        "end_date": end_date.isoformat(),
+                        "start_time": None,  # Removed time fields
+                        "end_time": None,    # Removed time fields
+                        "reason": reason.strip(),
+                        "attachment_url": None
+                    }
+                    result = create_request(token, payload)
+                    if result:
+                        # Show success message
+                        st.success("✅ Request submitted successfully!")
+                        # Invalidate cache (no rerun - will refresh on next interaction)
+                        invalidate_cache()
+                    else:
+                        st.error("❌ Failed to submit request. Please try again.")
 
 # ==========================================================
 # RIGHT SIDE : REQUEST HISTORY
@@ -389,6 +494,25 @@ with col_right:
                     use_container_width=True,
                     hide_index=True
                 )
+                
+                # Show cancel buttons for pending requests in "All" tab too
+                pending_in_all = display_df[display_df["status"] == "PENDING"].copy()
+                if not pending_in_all.empty:
+                    st.markdown("---")
+                    st.markdown("#### ❌ Cancel Pending Requests")
+                    for idx, row in pending_in_all.iterrows():
+                        col_btn1, col_btn2 = st.columns([3, 1])
+                        with col_btn1:
+                            st.caption(f"{row['request_type']} - {row['start_date']} to {row['end_date']}")
+                        with col_btn2:
+                            if st.button("Cancel", key=f"cancel_all_{row['id']}", use_container_width=True):
+                                if cancel_request(token, row['id']):
+                                    st.success("✅ Request canceled successfully!")
+                                    # Invalidate cache and rerun to update pending requests list
+                                    invalidate_cache()
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Failed to cancel request. Please try again.")
             else:
                 st.info("No requests found.")
         
@@ -410,10 +534,12 @@ with col_right:
                     with col_btn2:
                         if st.button("Cancel", key=f"cancel_{row['id']}", use_container_width=True):
                             if cancel_request(token, row['id']):
-                                st.success("✅ Request canceled")
-                                # Invalidate cache and rerun
+                                st.success("✅ Request canceled successfully!")
+                                # Invalidate cache and rerun to update pending requests list
                                 invalidate_cache()
                                 st.rerun()
+                            else:
+                                st.error("❌ Failed to cancel request. Please try again.")
             else:
                 st.info("No pending requests.")
         
@@ -459,5 +585,5 @@ with col_right:
     # Refresh Button
     if st.button("🔄 Refresh", use_container_width=True, key="refresh_attendance_requests"):
         invalidate_cache()
-        st.rerun()
+        st.info("🔄 Data refreshed. Please interact with the page to see updated data.")
 
