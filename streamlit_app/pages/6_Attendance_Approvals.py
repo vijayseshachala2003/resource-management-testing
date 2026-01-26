@@ -132,7 +132,7 @@ with tab1:
     with f_col2:
         filter_type = st.selectbox(
             "Filter Type", 
-            ["All", "LEAVE", "WFH", "REGULARIZATION", "SHIFT_CHANGE", "OTHER"],
+            ["All", "SICK_LEAVE", "WFH", "REGULARIZATION", "SHIFT_CHANGE", "OTHER"],
             key="pending_type_filter"
         )
     
@@ -193,9 +193,9 @@ with tab1:
                         st.caption(f"📧 {req['user_email']}")
                 
                 with col_info:
-                    request_type = req.get('request_type', 'LEAVE')
+                    request_type = req.get('request_type', 'SICK_LEAVE')
                     type_emoji = {
-                        'LEAVE': '🏖️',
+                        'SICK_LEAVE': '🏖️',
                         'WFH': '🏠',
                         'REGULARIZATION': '📝',
                         'SHIFT_CHANGE': '🔄',
@@ -246,7 +246,7 @@ with tab2:
     with h_col2:
         filter_req_type = st.selectbox(
             "Request Type", 
-            ["All", "LEAVE", "WFH", "REGULARIZATION", "SHIFT_CHANGE", "OTHER"],
+            ["All", "SICK_LEAVE", "WFH", "REGULARIZATION", "SHIFT_CHANGE", "OTHER"],
             key="history_type_filter"
         )
     with h_col3:
