@@ -112,18 +112,23 @@ user = st.session_state.get("user")
 user_name = "User"  # default fallback
 
 if user:
-    # 1️⃣ Supabase user (highest priority)
-    if hasattr(user, "user_metadata") and user.user_metadata:
+    if isinstance(user, dict):
         user_name = (
-            user.user_metadata.get("name")
-            or user.user_metadata.get("full_name")
+            user.get("name")
+            or user.get("full_name")
+            or user.get("email")
+            or user_name
+        )
+    # 1️⃣ Supabase user (highest priority)
+    elif hasattr(user, "user_metadata") and user.user_metadata:
+        user_name = (
+            user.user_metadata.get("full_name")
+            or user.user_metadata.get("name")
             or user.email
         )
-
     # 2️⃣ Backend User model
     elif hasattr(user, "name") and user.name:
         user_name = user.name
-
     # 3️⃣ Email fallback
     elif hasattr(user, "email"):
         user_name = user.email
@@ -198,11 +203,30 @@ with st.container(border=True):
             )
         
         with c_role:
-            role_val = "N/A"
-            if selected_proj_name and selected_proj_name in project_map:
-                # Fetch role from API response (default to N/A)
-                role_val = project_map[selected_proj_name].get('current_user_role', 'N/A')
-            st.text_input("Your Role", value=role_val, disabled=True)
+            # Build role options from available data
+            role_options = []
+            for project in assignments:
+                role = project.get("current_user_role")
+                if role and role.upper() != "N/A" and role not in role_options:
+                    role_options.append(role)
+
+            default_roles = ["ANNOTATION", "QC", "Super QC", "Live QC", "Retro QC", "Reasearch", "Other"]
+            for role in default_roles:
+                if role not in role_options:
+                    role_options.append(role)
+
+            role_index = 0
+            if current_session:
+                current_role = current_session.get("work_role")
+                if current_role in role_options:
+                    role_index = role_options.index(current_role)
+
+            role_val = st.selectbox(
+                "Select Role",
+                options=role_options,
+                index=role_index,
+                disabled=disabled_flag,
+            )
 
         st.write("") # Spacer
         

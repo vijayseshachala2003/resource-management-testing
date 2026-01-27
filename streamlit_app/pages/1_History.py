@@ -203,25 +203,6 @@ if time_history:
         st.dataframe(df_display.drop(columns=['minutes_worked'] if 'minutes_worked' in df_display.columns else []), 
                      use_container_width=True, hide_index=True)
 
-        # --- DAILY DETAILS VIEWER ---
-        st.markdown("---")
-        st.subheader("🔍 Daily Details Viewer")
-        selected_row_date = st.selectbox("Select a date to see more details:", df_display['Date'].unique())
-        
-        if selected_row_date:
-            try:
-                detail_row = df_logs[df_logs['sheet_date'].astype(str) == str(selected_row_date)].iloc[0]
-                with st.container(border=True):
-                    d1, d2, d3 = st.columns(3)
-                    d1.markdown(f"**Status**: {detail_row.get('status', 'N/A')}")
-                    d2.markdown(f"**Approved By**: {detail_row.get('approved_by_user_id', 'N/A')}")
-                    d3.markdown(f"**Approved At**: {detail_row.get('approved_at', 'N/A')}")
-                    
-                    st.markdown(f"**User Notes**: {detail_row.get('notes', 'No notes provided.')}")
-                    st.markdown(f"**Manager Comment**: {detail_row.get('approval_comment', 'No comments provided.')}")
-            except (IndexError, KeyError):
-                st.warning("Could not load details for this date.")
-        
         # --- EXPORT ---
         csv_data = df_logs.to_csv(index=False).encode('utf-8')
         st.download_button("📥 Download Report (CSV)", csv_data, f"user_report_{date.today()}.csv", "text/csv")

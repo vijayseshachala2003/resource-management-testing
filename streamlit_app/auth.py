@@ -11,7 +11,38 @@ load_dotenv()
 # To ENABLE Supabase Auth:  Set DISABLE_AUTH=false in .env
 # Must match backend setting in app/core/dependencies.py
 # ============================================
-DISABLE_AUTH = os.getenv("DISABLE_AUTH", "true").lower() == "true"
+DISABLE_AUTH = os.getenv("DISABLE_AUTH", "false").lower() == "true"
+
+
+def _set_user_session(res):
+    st.session_state["token"] = res.session.access_token
+    st.session_state["user"] = {
+        "id": res.user.id,
+        "email": res.user.email,
+        "name": res.user.user_metadata.get("name"),
+        "role": res.user.user_metadata.get("role", "USER"),
+    }
+    st.session_state["user_email"] = res.user.email
+    st.session_state["user_id"] = res.user.id
+    st.session_state["user_name"] = res.user.user_metadata.get("name", res.user.email)
+    st.session_state["user_role"] = res.user.user_metadata.get("role", "USER")
+
+
+def _get_query_param(name: str):
+    try:
+        value = st.query_params.get(name)
+        if isinstance(value, list):
+            return value[0] if value else None
+        return value
+    except Exception:
+        return st.experimental_get_query_params().get(name, [None])[0]
+
+
+def _clear_query_params():
+    try:
+        st.query_params.clear()
+    except Exception:
+        st.experimental_set_query_params()
 
 def login_ui():
     st.title("Login")
@@ -39,7 +70,56 @@ def login_ui():
     else:
         # SUPABASE AUTH MODE - Normal login flow
         from supabase_client import supabase
-        
+
+        # Handle OAuth callback (redirect back with ?code=)
+        auth_code = _get_query_param("code")
+        if auth_code and st.session_state.get("oauth_handled") != auth_code:
+            try:
+                try:
+                    res = supabase.auth.exchange_code_for_session({"auth_code": auth_code})
+                except TypeError:
+                    res = supabase.auth.exchange_code_for_session(auth_code)
+
+                if res and res.session:
+                    _set_user_session(res)
+                    st.session_state["oauth_handled"] = auth_code
+                    _clear_query_params()
+                    st.success("Logged in successfully")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Google OAuth failed: {e}")
+
+        st.subheader("Continue with Google")
+        redirect_to = os.getenv("SUPABASE_REDIRECT_URL", "http://localhost:8501")
+        if st.button("Continue with Google"):
+            try:
+                result = supabase.auth.sign_in_with_oauth({
+                    "provider": "google",
+                    "options": {"redirect_to": redirect_to},
+                })
+                url = None
+                if isinstance(result, dict):
+                    url = result.get("url") or (result.get("data") or {}).get("url")
+                else:
+                    url = getattr(result, "url", None)
+                    if not url and hasattr(result, "data"):
+                        url = getattr(result.data, "url", None)
+
+                if url:
+                    st.session_state["google_oauth_url"] = url
+                else:
+                    st.error("Could not start Google OAuth. No redirect URL returned.")
+            except Exception as e:
+                st.error(f"Google OAuth error: {e}")
+
+        if st.session_state.get("google_oauth_url"):
+            st.link_button(
+                "Open Google Sign-In",
+                st.session_state["google_oauth_url"],
+            )
+
+        st.markdown("---")
+
         email = st.text_input("Email")
         password = st.text_input("Password", type="password")
 
@@ -54,19 +134,7 @@ def login_ui():
                     st.error("Login failed")
                     return
 
-                # Store Supabase token
-                st.session_state["token"] = res.session.access_token
-                st.session_state["user"] = {
-                    "id": res.user.id,
-                    "email": res.user.email,
-                    "name": res.user.user_metadata.get("name"),
-                    "role": res.user.user_metadata.get("role", "USER"),
-                }
-
-                st.session_state["user_email"] = res.user.email
-                st.session_state["user_id"] = res.user.id
-                st.session_state["user_name"] = res.user.user_metadata.get("name", res.user.email)
-                st.session_state["user_role"] = res.user.user_metadata.get("role", "USER")
+                _set_user_session(res)
 
                 st.success("Logged in successfully")
                 st.rerun()
