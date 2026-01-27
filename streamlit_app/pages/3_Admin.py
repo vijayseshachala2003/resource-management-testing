@@ -474,7 +474,7 @@ if items:
                                         row[k] = v
                                     break
 
-                        # ✅ Sync all state
+                        # Sync all state
                         st.session_state.items = items
                         st.session_state.original_df = pd.DataFrame(items).set_index("id", drop=False)
                         st.session_state.all_edited_rows.clear()
