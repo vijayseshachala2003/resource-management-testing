@@ -3,7 +3,7 @@ import os
 
 load_dotenv()
 
-DISABLE_AUTH = os.getenv("DISABLE_AUTH", "true").lower() == "true"
+DISABLE_AUTH = os.getenv("DISABLE_AUTH", "false").lower() == "true"
 
 # Only initialize Supabase if auth is enabled
 if not DISABLE_AUTH:
