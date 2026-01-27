@@ -1,22 +1,19 @@
 import streamlit as st
 import pandas as pd
-import math
 from datetime import date
 import requests
 
 API_BASE_URL = "http://localhost:8000"
-PAGE_SIZE = 10
 
-def check_login():
+def authenticated_request(method, endpoint, data=None):
     token = st.session_state.get("token")
+    
     if not token:
         st.warning("Please login first.")
         st.stop()
-    return token
-
-def authenticated_request(method, endpoint, data=None):
-    token = check_login()
+    
     headers = {"Authorization": f"Bearer {token}"}
+    
     try:
         response = requests.request(method, f"{API_BASE_URL}{endpoint}", headers=headers, json=data)
         if response.status_code >= 400:
@@ -26,6 +23,20 @@ def authenticated_request(method, endpoint, data=None):
     except Exception as e:
         st.error(f"Connection Error: {e}")
         return None
+
+def rpm_id_to_display(rpm_id):
+    if not rpm_id:
+        return None
+    return f"{rpm_id} — {rpm_id_to_name.get(rpm_id, '')}"
+
+def get_rep_managers():
+    return authenticated_request("GET", "/admin/users/reporting_managers")
+
+def reset():
+    st.session_state.all_edited_rows.clear()
+    st.session_state.original_df = st.session_state.revert_df.copy(deep=True)
+    st.session_state.editor_key += 1
+    st.rerun()
 
 # ---------------------------
 # CONFIG
@@ -41,20 +52,27 @@ st.set_page_config(
 if "items" not in st.session_state:
     st.session_state["items"] = []
 
-if "page" not in st.session_state:
-    st.session_state.page = 1
+if "all_edited_rows" not in st.session_state:
+    st.session_state.all_edited_rows = {}
+
+if "users" not in st.session_state:
+    st.session_state.users = 0
+
+if "editor_key" not in st.session_state:
+    st.session_state.editor_key = 0
+
+if "original_df" not in st.session_state:
+    st.session_state.original_df = None
+
+if "revert_df" not in st.session_state:
+    st.session_state.revert_df = None
 
 # # ---------------------------
 # # HEADER
 # # ---------------------------
 st.title("Admin Panel")
-st.caption("Get workforce overview with additional details...")
 
-# ---------------------------
-# KPI DATA (API-ready)
-# ---------------------------
 # Make request to the server
-_ = check_login()
 response = authenticated_request("GET", "/admin/users/kpi_cards_info")
 
 if not response:
@@ -189,7 +207,7 @@ with st.container():
         st.markdown("**Status**")
         status_filter = st.selectbox(
             "",
-            ["None", "Present", "Absent", "Leave", "Unknown"],
+            ["None", "LATE", "PRESENT","ABSENT", "LEAVE", "OFF", "HOLIDAY", "UNKNOWN"],
             label_visibility="collapsed"
         )
 
@@ -202,8 +220,6 @@ with st.container():
             label_visibility="collapsed"
         )
 
-st.divider()
-
 # ===========================
 # 🔘 ACTION BAR
 # ===========================
@@ -215,137 +231,263 @@ with action_col1:
         width="content"
     )
 
+rpm_list = get_rep_managers() or []
+
+rpm_id_to_name = {
+    r["rpm_id"]: r["rpm_name"] for r in rpm_list
+}
+
+rpm_options = [
+    f'{r["rpm_id"]} — {r["rpm_name"]}' for r in rpm_list
+]
+
+rpm_display_to_rpm_id = {
+    f'{r["rpm_id"]} — {r["rpm_name"]}': r["rpm_id"] for r in rpm_list
+}
+
 # ===========================
 # 📡 FETCH DATA
 # ===========================
-if fetch_clicked:
+payload = None
+if fetch_clicked: 
     payload = {
         "email": search_query.strip() if search_mode == "Email" and search_query else None,
         "name": search_query.strip() if search_mode == "Name" and search_query else None,
-        "is_active": None if active_filter == None else active_filter == "Active",
-        "work_role": None if contractor_filter == None else contractor_filter,
-        "allocated": None if allocation_filter == None else allocation_filter == "Allocated",
-        "status": None if status_filter == None else status_filter,
-        "date": status_date.isoformat()
+        "is_active": None if active_filter == "None" else active_filter == "Active",
+        "work_role": None if contractor_filter == "None" else contractor_filter,
+        "allocated": None if allocation_filter == "None" else allocation_filter == "Allocated",
+        "status": None if status_filter == "None" else status_filter,
+        "date": status_date.isoformat(),
     }
 
-    # 🔴 Replace with backend call
-    response = authenticated_request("POST", "/admin/users/users_with_filter", data=payload)
+st.divider()
 
-    st.session_state["items"] = []  # placeholder
-    st.session_state.page = 1
+if payload:
+    st.session_state.all_edited_rows.clear()
+    with st.spinner():
+        response = authenticated_request(
+            "POST",
+            "/admin/users/users_with_filter",
+            data=payload
+        )
 
-    st.info("Filters applied. Awaiting backend response.")
+    if not response:
+        st.stop()
+    
+    st.session_state.items = response["items"]
+    st.session_state.users = response["meta"]["total"]
+    st.session_state.all_edited_rows.clear()
+    st.session_state.editor_key += 1
 
 # ===========================
-# 📋 RESULTS
+# DATA TABLE
 # ===========================
 items = st.session_state["items"]
 
 if items:
-    total_pages = math.ceil(len(items) / PAGE_SIZE)
+    st.subheader(f"Total Users: {st.session_state.users}")
 
-    st.subheader("Results")
+    df = pd.DataFrame(items).set_index("id", drop=False)
+    df = df[
+        [
+            "id",
+            "name",
+            "email",
+            "role",
+            "work_role",
+            "is_active",
+            "shift_id",
+            "shift_name",
+            "rpm_user_id",
+            "allocated_projects",
+            "today_status",
+        ]
+    ]
+    df["rpm_user_id"] = df["rpm_user_id"].apply(
+        lambda x: f"{x} — {rpm_id_to_name.get(x, '')}" if x else None
+    )
+    df.index = df.index.astype(str)
+    
+    st.session_state.original_df = df.copy(deep=True)
+    st.session_state.revert_df = df.copy(deep=True)
 
-    # ---- Pagination Controls ----
-    pcol1, pcol2, pcol3 = st.columns([1, 2, 1])
+# # ===========================
+# # EDITABLE TABLE
+# # ===========================
+    edited_df = st.data_editor(
+        df,
+        # key="user_editor",
+        key=f"user_editor_page_{st.session_state.editor_key}",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "id": st.column_config.TextColumn(
+                "ID", disabled=True
+            ),
+            "name": st.column_config.TextColumn(
+                "Name" 
+            ),
+            "email": st.column_config.TextColumn(
+                "Email"
+            ),
+            "allocated_projects": st.column_config.NumberColumn(
+                "Projects", disabled=True
+            ),
+            "today_status": st.column_config.TextColumn(
+                "Status", disabled=True
+            ),
+            "role": st.column_config.SelectboxColumn(
+                "Role",
+                options=["ADMIN", "USER"]
+            ),
+            "shift_id": st.column_config.TextColumn(
+                "Shift ID", disabled=True
+            ),
+            "shift_name": st.column_config.SelectboxColumn(
+                "Shift Name",
+                options=["GENERAL", "MORNING", "AFTERNOON",  "NIGHT"]
+            ),
+            "rpm_user_id": st.column_config.SelectboxColumn(
+                "Reporting Manager ID",
+                options=rpm_options,
+            ),
+            "work_role": st.column_config.SelectboxColumn(
+                "Work Role",
+                options=["CONTRACTOR", "EMPLOYEE"]
+            ),
+            "is_active": st.column_config.CheckboxColumn("Active"),
+        },
+    )
 
-    with pcol1:
-        if st.button("⬅ Prev", disabled=st.session_state.page == 1):
-            st.session_state.page -= 1
-            st.rerun()
+# # ===========================
+# # DETECT CHANGES
+# # ===========================
+    EDITABLE_COLUMNS = [
+        "name",
+        "email",
+        "role",
+        "work_role",
+        "is_active",
+        "shift_name",
+        "rpm_user_id"
+    ]
+    
+    for user_id in edited_df.index:
+        user_id = str(user_id)
 
-    with pcol3:
-        if st.button("Next ➡", disabled=st.session_state.page == total_pages):
-            st.session_state.page += 1
-            st.rerun()
+        original = st.session_state.original_df.loc[user_id, EDITABLE_COLUMNS]
+        edited = edited_df.loc[user_id, EDITABLE_COLUMNS]
 
-    with pcol2:
+        if not original.equals(edited):
+            st.session_state.all_edited_rows[user_id] = edited_df.loc[user_id].to_dict()
+
+# ===========================
+# REMOVE REVERTED ROWS
+# ===========================
+    for user_id in list(st.session_state.all_edited_rows.keys()):
+        if user_id in edited_df.index and user_id in st.session_state.original_df.index:
+            if st.session_state.original_df.loc[user_id, EDITABLE_COLUMNS].equals(
+                edited_df.loc[user_id, EDITABLE_COLUMNS]
+            ):
+                del st.session_state.all_edited_rows[user_id]
+
+# ===========================
+# HIGHLIGHT EDITED ROWS
+# ===========================
+    total_edits = len(st.session_state.all_edited_rows)
+
+    if total_edits:
+        st.warning(f"{total_edits} row(s) edited")
         st.markdown(
-            f"<div style='text-align:center'>"
-            f"Page {st.session_state.page} / {total_pages}"
-            f"</div>",
+            """
+            <style>
+            div[data-testid="stDataEditor"] tbody tr {
+                transition: background-color 0.2s;
+            }
+            </style>
+            """,
             unsafe_allow_html=True
         )
+# ===========================
+# UPDATE BUTTON
+# ===========================
+    update, discard = st.columns([1, 5])
 
-    # ---- Page Slice ----
-    start = (st.session_state.page - 1) * PAGE_SIZE
-    end = start + PAGE_SIZE
-    page_items = items[start:end]
+    with update:
+        update_clicked = st.button(
+            "Update Changes",
+            disabled=len(st.session_state.all_edited_rows) == 0,
+            width="content"
+        )
+    
+    with discard:
+        discard_updates = st.button(
+            "Discard Updates",
+            disabled=len(st.session_state.all_edited_rows) == 0,
+            width="content"
+        )
 
-    # ---- Table Header ----
-    header_cols = st.columns([2.5, 2, 1.2, 1.4, 1.4, 1.5, 2.5])
-    headers = [
-        "Email",
-        "Name",
-        "Role",
-        "Work Role",
-        "Active",
-        "Projects",
-        "Actions",
-    ]
+    if update_clicked:
+        with st.spinner():
+            to_send = {"updates": []}
 
-    for col, h in zip(header_cols, headers):
-        col.markdown(f"**{h}**")
+            for user_id, row in st.session_state.all_edited_rows.items():
+                changes = {}
 
-    st.divider()
+                for col in EDITABLE_COLUMNS:
 
-    # ---- Rows ----
-    for user in page_items:
-        row = st.columns([2.5, 2, 1.2, 1.4, 1.4, 1.5, 2.5])
+                    old = st.session_state.original_df.loc[user_id, col]
+                    new = row[col]
 
-        row[0].write(user["email"])
-        row[1].write(user["name"])
-        row[2].write(user["role"])
-        row[3].write(user["work_role"])
+                    if old != new:
+                        if col == "rpm_user_id":
+                            new = rpm_display_to_rpm_id.get(new)
 
-        # Active badge
-        if user["is_active"]:
-            row[4].markdown("🟢 **Active**")
-        else:
-            row[4].markdown("🔴 **Inactive**")
+                        changes[col] = new
 
-        row[5].write(user["allocated_projects"])
+                if changes:
+                    to_send["updates"].append({
+                        "id": user_id,
+                        "changes": changes
+                    })
 
-        # ---- ACTIONS ----
-        with row[6]:
-            a1, a2, a3 = st.columns(3)
+            st.success("Ready to send these updates to backend")
+            st.json(to_send)
 
-            with a1:
-                if st.button(
-                    "✏️",
-                    key=f"edit-{user['id']}",
-                    help="Edit user"
-                ):
-                    st.info(f"Edit user {user['id']} (open modal / navigate)")
+            optimistic_df = edited_df.copy(deep=True)
 
-            with a2:
-                toggle_label = "Deactivate" if user["is_active"] else "Activate"
-                if st.button(
-                    "🔄",
-                    key=f"toggle-{user['id']}",
-                    help=toggle_label
-                ):
-                    st.info(
-                        f"{toggle_label} user {user['id']} (API call here)"
-                    )
+            try:
+                res = authenticated_request("PATCH", "/admin/users/bulk_update", data=to_send)
 
-            with a3:
-                if st.button(
-                    "🕒",
-                    key=f"shift-{user['id']}",
-                    help="Assign default shift"
-                ):
-                    st.info(
-                        f"Assign default shift to user {user['id']}"
-                    )
+                if res:
+                    if int(res["failed_count"]) == 0:
 
-        st.divider()
+                        items = st.session_state["items"]
 
-elif fetch_clicked:
-    st.warning("No users matched the filters.")
+                        for upd in to_send["updates"]:
+                            uid = upd["id"]
+                            changes = upd["changes"]
 
-else:
-    st.info("Apply filters to view users.")
+                            for row in items:
+                                if str(row["id"]) == uid:
+                                    for k, v in changes.items():
+                                        row[k] = v
+                                    break
 
+                        # Sync all state
+                        st.session_state.items = items
+                        st.session_state.original_df = pd.DataFrame(items).set_index("id", drop=False)
+                        st.session_state.all_edited_rows.clear()
+                        st.session_state.editor_key += 1
 
+                        st.toast("Changes saved successfully")
+                        st.rerun()
+                    else:
+                        st.error(f"Error: {', '.join(res['failed'])}")
+                        st.stop()
+            except Exception:
+                st.error("Update failed. Reverting changes.")
+                reset()
+
+    if discard_updates:
+        reset()
