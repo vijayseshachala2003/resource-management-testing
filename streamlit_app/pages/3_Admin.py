@@ -3,6 +3,7 @@ import pandas as pd
 import math
 from datetime import date
 import requests
+from role_guard import setup_role_access
 
 API_BASE_URL = "http://localhost:8000"
 PAGE_SIZE = 10
@@ -32,8 +33,9 @@ def authenticated_request(method, endpoint, data=None):
 # ---------------------------
 st.set_page_config(
     page_title="Admin Panel",
-    layout="wide"
+    layout="wide",
 )
+setup_role_access(__file__)
 
 # ---------------------------
 # STATE

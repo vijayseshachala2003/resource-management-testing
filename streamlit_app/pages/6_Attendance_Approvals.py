@@ -2,9 +2,11 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime
+from role_guard import setup_role_access
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Attendance Request Approvals", layout="wide")
+setup_role_access(__file__)
 API_BASE_URL = "http://127.0.0.1:8000"
 
 # --- HELPER FUNCTIONS ---
@@ -376,19 +378,19 @@ with tab3:
                     st.warning("Please enter an Approval ID and confirm deletion")
 
 
-# --- SIDEBAR INFO ---
-with st.sidebar:
-    st.markdown("### ℹ️ About This Page")
-    st.markdown("""
-    **Attendance Request Approvals** allows managers to:
+# # --- SIDEBAR INFO ---
+# with st.sidebar:
+#     st.markdown("### ℹ️ About This Page")
+#     st.markdown("""
+#     **Attendance Request Approvals** allows managers to:
     
-    - 📥 View and approve pending requests
-    - 📜 See approval history with filters
-    - ⚙️ Manage (update/delete) approvals
+#     - 📥 View and approve pending requests
+#     - 📜 See approval history with filters
+#     - ⚙️ Manage (update/delete) approvals
     
-    ---
+#     ---
     
-    **Filters Available:**
-    - Request Type (LEAVE, WFH, etc.)
-    - Decision (APPROVED, REJECTED)
-    """)
+#     **Filters Available:**
+#     - Request Type (LEAVE, WFH, etc.)
+#     - Decision (APPROVED, REJECTED)
+#     """)

@@ -28,6 +28,14 @@ def _set_user_session(res):
     st.session_state["user_role"] = res.user.user_metadata.get("role", "USER")
 
 
+def _redirect_after_login():
+    role = str(st.session_state.get("user_role", "")).upper()
+    if role == "USER":
+        st.switch_page("pages/3_Home.py")
+    if role in {"ADMIN", "MANAGER"}:
+        st.switch_page("pages/7_Project_Resource_Allocation.py")
+
+
 def _get_query_param(name: str):
     try:
         value = st.query_params.get(name)
@@ -85,7 +93,7 @@ def login_ui():
                     st.session_state["oauth_handled"] = auth_code
                     _clear_query_params()
                     st.success("Logged in successfully")
-                    st.rerun()
+                    _redirect_after_login()
             except Exception as e:
                 st.error(f"Google OAuth failed: {e}")
 
@@ -137,7 +145,7 @@ def login_ui():
                 _set_user_session(res)
 
                 st.success("Logged in successfully")
-                st.rerun()
+                _redirect_after_login()
 
             except Exception as e:
                 st.error(str(e))

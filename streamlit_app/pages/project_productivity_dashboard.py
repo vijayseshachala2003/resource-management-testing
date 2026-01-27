@@ -8,6 +8,7 @@ import requests
 import os
 from dotenv import load_dotenv
 from typing import Dict, Optional, List
+from role_guard import setup_role_access
 
 load_dotenv()
 
@@ -15,6 +16,7 @@ load_dotenv()
 # PAGE CONFIG
 # =====================================================================
 st.set_page_config(page_title="Project Productivity & Quality Dashboard", layout="wide")
+setup_role_access(__file__)
 
 # =====================================================================
 # API CONFIGURATION

@@ -1,9 +1,11 @@
 import streamlit as st
 import requests
 import time
+from role_guard import setup_role_access
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Approvals Inbox", layout="centered")
+setup_role_access(__file__)
 API_BASE_URL = "http://127.0.0.1:8000"
 
 # --- HELPER FUNCTIONS ---

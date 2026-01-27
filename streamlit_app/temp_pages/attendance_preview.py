@@ -1,11 +1,13 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date, time as dt_time
+from role_guard import setup_role_access
 
 # -----------------------------
 # PAGE CONFIG
 # -----------------------------
 st.set_page_config(page_title="Attendance Management System", layout="wide")
+setup_role_access(__file__)
 
 # -----------------------------
 # SESSION STATE INIT

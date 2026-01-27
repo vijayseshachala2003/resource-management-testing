@@ -4,11 +4,13 @@ import requests
 import os
 from datetime import datetime, timedelta, date
 from dotenv import load_dotenv
+from role_guard import setup_role_access
 
 load_dotenv()
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Team History", layout="wide")
+setup_role_access(__file__)
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
 
 # --- AUTH CHECK ---
