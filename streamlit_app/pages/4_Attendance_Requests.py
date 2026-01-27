@@ -3,8 +3,10 @@ from api import api_request
 from datetime import datetime, date, timedelta
 import pytz
 import pandas as pd
+from role_guard import setup_role_access
 
 st.set_page_config(page_title="Attendance Requests", layout="wide")
+setup_role_access(__file__)
 
 # ---------------- Helpers ----------------
 

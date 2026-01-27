@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 from requests.exceptions import ConnectionError, Timeout, HTTPError
 import math
+from role_guard import setup_role_access
 
 API_BASE_URL = "http://localhost:8000"
 PAGE_SIZE = 10
@@ -46,6 +47,7 @@ def authenticated_request(method, endpoint, data=None, file=None):
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Users List", layout="wide")
+setup_role_access(__file__)
 
 # ---------------------------
 # STATE

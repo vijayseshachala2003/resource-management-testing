@@ -3,9 +3,11 @@ import requests
 import pandas as pd
 import time
 from datetime import date, datetime
+from role_guard import setup_role_access
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Admin | Project Manager", layout="wide")
+setup_role_access(__file__)
 API_BASE_URL = "http://127.0.0.1:8000"
 
 ROLE_OPTIONS = ["ANNOTATION", "QC", "LIVE_QC", "RETRO_QC", "PM", "APM", "RPM"]

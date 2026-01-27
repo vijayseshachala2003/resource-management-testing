@@ -2,11 +2,13 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import date
+from role_guard import setup_role_access
 
 # --- CONFIG ---
 API_URL = "http://127.0.0.1:8000"
 
 st.set_page_config(page_title="Analytics Engine", layout="wide")
+setup_role_access(__file__)
 st.title("🧠 Analytics & Intelligence Engine")
 
 # --- 1. AUTH CHECK ---

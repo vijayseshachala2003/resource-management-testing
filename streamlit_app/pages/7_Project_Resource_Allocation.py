@@ -10,6 +10,7 @@ import os
 from dotenv import load_dotenv
 from typing import Dict, List, Optional
 import time
+from role_guard import setup_role_access
 
 load_dotenv()
 
@@ -18,8 +19,9 @@ load_dotenv()
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="Project Resource Allocation",
-    layout="wide"
+    layout="wide",
 )
+setup_role_access(__file__)
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 

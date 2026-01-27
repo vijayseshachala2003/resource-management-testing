@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 import requests
+from role_guard import setup_role_access
 
 API_BASE_URL = "http://localhost:8000"
 
@@ -43,8 +44,9 @@ def reset():
 # ---------------------------
 st.set_page_config(
     page_title="Admin Panel",
-    layout="wide"
+    layout="wide",
 )
+setup_role_access(__file__)
 
 # ---------------------------
 # STATE

@@ -3,11 +3,13 @@ import requests
 import pandas as pd
 from datetime import date, timedelta
 import io
+from role_guard import setup_role_access
 
 # --- CONFIG ---
 API_URL = "http://127.0.0.1:8000"
 
 st.set_page_config(page_title="Reports Center", layout="wide")
+setup_role_access(__file__)
 st.title("📂 Reports Command Center")
 
 # --- 1. AUTH CHECK ---

@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 from datetime import date, datetime
+from role_guard import setup_role_access
 
 # ---------------------------------------------------------
 # HELPER: FORMAT DURATION HH:MM:SS
@@ -42,6 +43,7 @@ def calculate_hours_worked(clock_in, clock_out, minutes_worked):
 # PAGE CONFIG
 # ---------------------------------------------------------
 st.set_page_config(page_title="Attendance Daily", layout="wide")
+setup_role_access(__file__)
 
 API_BASE_URL = "http://127.0.0.1:8000"
 

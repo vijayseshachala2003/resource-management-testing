@@ -1,3 +1,5 @@
+from role_guard import setup_role_access
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -15,6 +17,7 @@ load_dotenv()
 # PAGE CONFIG
 # =====================================================================
 st.set_page_config(page_title="User Productivity & Quality Dashboard", layout="wide")
+setup_role_access(__file__)
 
 # =====================================================================
 # API CONFIGURATION
@@ -345,6 +348,8 @@ with col2:
 with col3:
     # Soul ID Search (only for All Users mode)
     if view_mode == "All Users":
+        if "user_filter_soul_id" not in st.session_state:
+            st.session_state.user_filter_soul_id = ""
         soul_id_search = st.text_input(
             "🔍 Search by Soul ID", 
             placeholder="Enter Soul ID...", 
@@ -376,7 +381,7 @@ if "user_filter_soul_id" not in st.session_state:
 
 with filter_col1:
     min_date = df["date"].min().date()
-    max_date = df["date"].max().date()
+    max_date = max(df["date"].max().date(), date.today())
     date_range = st.date_input(
         "Date Range",
         value=st.session_state.user_filter_date_range if st.session_state.user_filter_date_range else (min_date, max_date),
