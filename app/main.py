@@ -21,9 +21,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from app.api import auth
+
 app.include_router(users.router)
 app.include_router(projects.router)
-# app.include_router(auth.router)
+app.include_router(auth.router)
 app.include_router(projects_daily.router)
 
 from app.api.time import history

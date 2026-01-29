@@ -20,6 +20,24 @@ def format_time_local(ts):
     except:
         return str(ts)
 
+def format_time_only(time_str):
+    """Format time string to HH:MM format"""
+    if not time_str:
+        return ""
+    try:
+        # Handle time object or string
+        if isinstance(time_str, str):
+            # Try parsing time string (HH:MM:SS or HH:MM)
+            if ":" in time_str:
+                parts = time_str.split(":")
+                return f"{parts[0]}:{parts[1]}"
+            return time_str
+        elif hasattr(time_str, 'strftime'):
+            return time_str.strftime("%H:%M")
+        return str(time_str)
+    except:
+        return str(time_str)
+
 def calc_days(start_d: date, end_d: date) -> int:
     return (end_d - start_d).days + 1
 
@@ -334,14 +352,20 @@ with col_left:
     with box:
         st.markdown("#### 📝 New Request Form")
         
+        # Use already fetched projects
+        proj_name_to_id = {p["name"]: p["id"] for p in projects}
+        proj_names = ["— none —"] + list(proj_name_to_id.keys())
+        
+        # Request Type Selection - OUTSIDE form so it triggers immediate rerun
+        req_type = st.selectbox(
+            "Request Type",
+            ["SICK_LEAVE", "FULL-DAY", "HALF-DAY", "WFH", "REGULARIZATION", "SHIFT_CHANGE", "OTHER"],
+            help="Select the type of attendance request",
+            key="req_type_selector"
+        )
+        
         # Use form to enable automatic clearing
         with st.form("attendance_request_form", clear_on_submit=True):
-            # Request Type Selection
-            req_type = st.selectbox(
-                "Request Type",
-                ["SICK_LEAVE", "FULL-DAY", "HALF-DAY", "WFH", "REGULARIZATION", "SHIFT_CHANGE", "OTHER"],
-                help="Select the type of attendance request"
-            )
             
             # Date Range (no default values)
             col_a, col_b = st.columns(2)
@@ -374,6 +398,16 @@ with col_left:
                 elif req_type == "HALF-DAY":
                     st.info("ℹ️ 0.5 day - Half Day Leave")
             
+            # Time inputs (only for REGULARIZATION and SHIFT_CHANGE)
+            start_time = None
+            end_time = None
+            if req_type in ["REGULARIZATION", "SHIFT_CHANGE"]:
+                time_col1, time_col2 = st.columns(2)
+                with time_col1:
+                    start_time = st.time_input("Start Time", value=None, help="Required for regularization and shift change")
+                with time_col2:
+                    end_time = st.time_input("End Time", value=None, help="Required for regularization and shift change")
+            
             # Reason
             reason = st.text_area("Reason", height=100, placeholder="Enter reason for request...")
             
@@ -389,6 +423,8 @@ with col_left:
                     st.error("❌ End date is required.")
                 elif req_type != "HALF-DAY" and end_date < start_date:
                     st.error("❌ End date must be >= start date.")
+                elif req_type in ["REGULARIZATION", "SHIFT_CHANGE"] and (not start_time or not end_time):
+                    st.error("❌ Start time and end time are required for regularization and shift change requests.")
                 else:
                     # For HALF-DAY, ensure end_date equals start_date
                     if req_type == "HALF-DAY":
@@ -398,8 +434,8 @@ with col_left:
                         "request_type": req_type,
                         "start_date": start_date.isoformat(),
                         "end_date": end_date.isoformat(),
-                        "start_time": None,  # Removed time fields
-                        "end_time": None,    # Removed time fields
+                        "start_time": start_time.isoformat() if start_time else None,
+                        "end_time": end_time.isoformat() if end_time else None,
                         "reason": reason.strip(),
                         "attachment_url": None
                     }
@@ -427,9 +463,13 @@ with col_right:
         # Convert to DataFrame for easier manipulation
         df_data = []
         for it in items:
-            df_data.append({
+            req_type = it.get("request_type", "UNKNOWN")
+            # Only include time fields for REGULARIZATION and SHIFT_CHANGE
+            include_times = req_type in ["REGULARIZATION", "SHIFT_CHANGE"]
+            
+            row_data = {
                 "id": it.get("id", ""),
-                "request_type": it.get("request_type", "UNKNOWN"),
+                "request_type": req_type,
                 "project": proj_id_to_name.get(it.get("project_id"), "—"),
                 "start_date": it.get("start_date", ""),
                 "end_date": it.get("end_date", ""),
@@ -437,7 +477,14 @@ with col_right:
                 "status": it.get("status", "PENDING"),
                 "requested_at": it.get("requested_at") or it.get("created_at", ""),
                 "review_comment": it.get("review_comment", ""),
-            })
+            }
+            
+            # Add time fields only for REGULARIZATION and SHIFT_CHANGE
+            if include_times:
+                row_data["start_time"] = format_time_only(it.get("start_time"))
+                row_data["end_time"] = format_time_only(it.get("end_time"))
+            
+            df_data.append(row_data)
         
         df = pd.DataFrame(df_data)
         
@@ -447,8 +494,32 @@ with col_right:
         with status_tabs[0]:
             display_df = df.copy()
             if not display_df.empty:
+                # Select columns based on request type
+                base_columns = ["request_type", "project", "start_date", "end_date", "status", "requested_at"]
+                
+                # Check if any row is REGULARIZATION or SHIFT_CHANGE (these need time columns)
+                has_time_data = display_df["request_type"].isin(["REGULARIZATION", "SHIFT_CHANGE"]).any()
+                
+                if has_time_data:
+                    # Add time columns conditionally - only show for rows that have times
+                    display_df_display = display_df[base_columns].copy()
+                    # Add time columns as separate columns, but only populate for relevant request types
+                    display_df_display["start_time"] = display_df.apply(
+                        lambda row: row.get("start_time", "") if row["request_type"] in ["REGULARIZATION", "SHIFT_CHANGE"] else "",
+                        axis=1
+                    )
+                    display_df_display["end_time"] = display_df.apply(
+                        lambda row: row.get("end_time", "") if row["request_type"] in ["REGULARIZATION", "SHIFT_CHANGE"] else "",
+                        axis=1
+                    )
+                    # Reorder columns to show times after dates
+                    column_order = ["request_type", "project", "start_date", "end_date", "start_time", "end_time", "status", "requested_at"]
+                    display_df_display = display_df_display[column_order]
+                else:
+                    display_df_display = display_df[base_columns]
+                
                 st.dataframe(
-                    display_df[["request_type", "project", "start_date", "end_date", "status", "requested_at"]],
+                    display_df_display,
                     use_container_width=True,
                     hide_index=True
                 )
@@ -477,8 +548,29 @@ with col_right:
         with status_tabs[1]:
             pending_df = df[df["status"] == "PENDING"].copy()
             if not pending_df.empty:
+                # Select columns based on request type
+                base_columns = ["request_type", "project", "start_date", "end_date", "requested_at"]
+                
+                # Check if any row is REGULARIZATION or SHIFT_CHANGE (these need time columns)
+                has_time_data = pending_df["request_type"].isin(["REGULARIZATION", "SHIFT_CHANGE"]).any()
+                
+                if has_time_data:
+                    pending_df_display = pending_df[base_columns].copy()
+                    pending_df_display["start_time"] = pending_df.apply(
+                        lambda row: row.get("start_time", "") if row["request_type"] in ["REGULARIZATION", "SHIFT_CHANGE"] else "",
+                        axis=1
+                    )
+                    pending_df_display["end_time"] = pending_df.apply(
+                        lambda row: row.get("end_time", "") if row["request_type"] in ["REGULARIZATION", "SHIFT_CHANGE"] else "",
+                        axis=1
+                    )
+                    column_order = ["request_type", "project", "start_date", "end_date", "start_time", "end_time", "requested_at"]
+                    pending_df_display = pending_df_display[column_order]
+                else:
+                    pending_df_display = pending_df[base_columns]
+                
                 st.dataframe(
-                    pending_df[["request_type", "project", "start_date", "end_date", "requested_at"]],
+                    pending_df_display,
                     use_container_width=True,
                     hide_index=True
                 )
@@ -504,8 +596,29 @@ with col_right:
         with status_tabs[2]:
             approved_df = df[df["status"] == "APPROVED"].copy()
             if not approved_df.empty:
+                # Select columns based on request type
+                base_columns = ["request_type", "project", "start_date", "end_date", "review_comment", "requested_at"]
+                
+                # Check if any row is REGULARIZATION or SHIFT_CHANGE (these need time columns)
+                has_time_data = approved_df["request_type"].isin(["REGULARIZATION", "SHIFT_CHANGE"]).any()
+                
+                if has_time_data:
+                    approved_df_display = approved_df[base_columns].copy()
+                    approved_df_display["start_time"] = approved_df.apply(
+                        lambda row: row.get("start_time", "") if row["request_type"] in ["REGULARIZATION", "SHIFT_CHANGE"] else "",
+                        axis=1
+                    )
+                    approved_df_display["end_time"] = approved_df.apply(
+                        lambda row: row.get("end_time", "") if row["request_type"] in ["REGULARIZATION", "SHIFT_CHANGE"] else "",
+                        axis=1
+                    )
+                    column_order = ["request_type", "project", "start_date", "end_date", "start_time", "end_time", "review_comment", "requested_at"]
+                    approved_df_display = approved_df_display[column_order]
+                else:
+                    approved_df_display = approved_df[base_columns]
+                
                 st.dataframe(
-                    approved_df[["request_type", "project", "start_date", "end_date", "review_comment", "requested_at"]],
+                    approved_df_display,
                     use_container_width=True,
                     hide_index=True
                 )
@@ -515,8 +628,29 @@ with col_right:
         with status_tabs[3]:
             rejected_df = df[df["status"] == "REJECTED"].copy()
             if not rejected_df.empty:
+                # Select columns based on request type
+                base_columns = ["request_type", "project", "start_date", "end_date", "review_comment", "requested_at"]
+                
+                # Check if any row is REGULARIZATION or SHIFT_CHANGE (these need time columns)
+                has_time_data = rejected_df["request_type"].isin(["REGULARIZATION", "SHIFT_CHANGE"]).any()
+                
+                if has_time_data:
+                    rejected_df_display = rejected_df[base_columns].copy()
+                    rejected_df_display["start_time"] = rejected_df.apply(
+                        lambda row: row.get("start_time", "") if row["request_type"] in ["REGULARIZATION", "SHIFT_CHANGE"] else "",
+                        axis=1
+                    )
+                    rejected_df_display["end_time"] = rejected_df.apply(
+                        lambda row: row.get("end_time", "") if row["request_type"] in ["REGULARIZATION", "SHIFT_CHANGE"] else "",
+                        axis=1
+                    )
+                    column_order = ["request_type", "project", "start_date", "end_date", "start_time", "end_time", "review_comment", "requested_at"]
+                    rejected_df_display = rejected_df_display[column_order]
+                else:
+                    rejected_df_display = rejected_df[base_columns]
+                
                 st.dataframe(
-                    rejected_df[["request_type", "project", "start_date", "end_date", "review_comment", "requested_at"]],
+                    rejected_df_display,
                     use_container_width=True,
                     hide_index=True
                 )

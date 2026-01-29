@@ -7,14 +7,6 @@ st.set_page_config(page_title="Resource Management", layout="wide")
 setup_role_access(__file__)
 
 if "token" not in st.session_state:
-    st.markdown(
-        """
-        <style>
-        [data-testid="stSidebarNav"] { display: none; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
     st.sidebar.markdown("### Navigation")
     st.sidebar.page_link("app.py", label="Login")
 
