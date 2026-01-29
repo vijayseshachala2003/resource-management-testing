@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from uuid import UUID
 from typing import List, Optional
 from datetime import datetime
 
 from app.db.session import get_db
 from app.models.attendance_request import AttendanceRequest
+from app.models.project_members import ProjectMember
+from app.models.project_owners import ProjectOwner
 from app.schemas.attendance_request import (
     AttendanceRequestCreate,
     AttendanceRequestUpdate,
@@ -144,7 +146,8 @@ def list_all_requests_with_user_info(
     request_type: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Admin endpoint to list all attendance requests with user info.
@@ -157,6 +160,30 @@ def list_all_requests_with_user_info(
         User.name.label('user_name'),
         User.email.label('user_email')
     ).join(User, AttendanceRequest.user_id == User.id)
+
+    role_value = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
+    if role_value.upper() != "ADMIN":
+        # Restrict visibility to project owners + reporting managers
+        project_owner_match = db.query(ProjectOwner.id).join(
+            ProjectMember,
+            ProjectOwner.project_id == ProjectMember.project_id,
+        ).filter(
+            ProjectOwner.user_id == current_user.id,
+            ProjectMember.user_id == AttendanceRequest.user_id,
+            ProjectMember.is_active.is_(True),
+            ProjectMember.assigned_from <= AttendanceRequest.start_date,
+            or_(
+                ProjectMember.assigned_to.is_(None),
+                ProjectMember.assigned_to >= AttendanceRequest.start_date,
+            ),
+        )
+
+        query = query.filter(
+            or_(
+                User.rpm_user_id == current_user.id,
+                project_owner_match.exists(),
+            )
+        )
 
     if status:
         query = query.filter(AttendanceRequest.status == status)
