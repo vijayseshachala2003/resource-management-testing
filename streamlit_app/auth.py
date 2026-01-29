@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import requests
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -38,6 +39,27 @@ def _set_user_session(res):
     st.session_state["user_id"] = res.user.id
     st.session_state["user_name"] = res.user.user_metadata.get("name", res.user.email)
     st.session_state["user_role"] = res.user.user_metadata.get("role", "USER")
+
+
+def _sync_role_from_backend() -> None:
+    token = st.session_state.get("token")
+    if not token:
+        return
+    api_base_url = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        response = requests.get(f"{api_base_url}/me/", headers=headers, timeout=5)
+        if response.status_code >= 400:
+            return
+        user = response.json()
+    except Exception:
+        return
+
+    if isinstance(user, dict):
+        st.session_state["user"] = user
+        st.session_state["user_role"] = user.get("role", st.session_state.get("user_role"))
+        if user.get("name"):
+            st.session_state["user_name"] = user.get("name")
 
 
 def _redirect_after_login():
@@ -102,6 +124,7 @@ def login_ui():
 
                 if res and res.session:
                     _set_user_session(res)
+                    _sync_role_from_backend()
                     st.session_state["oauth_handled"] = auth_code
                     _clear_query_params()
                     st.success("Logged in successfully")
@@ -112,7 +135,7 @@ def login_ui():
         st.subheader("🔵 Continue with Google")
         st.caption("Quick sign-in with your Google account. Works alongside email/password authentication.")
         redirect_to = os.getenv("SUPABASE_REDIRECT_URL", "http://localhost:8501")
-        if st.button("Continue with Google"):
+        if "google_oauth_url" not in st.session_state:
             try:
                 result = supabase.auth.sign_in_with_oauth({
                     "provider": "google",
@@ -125,19 +148,15 @@ def login_ui():
                     url = getattr(result, "url", None)
                     if not url and hasattr(result, "data"):
                         url = getattr(result.data, "url", None)
-
                 if url:
                     st.session_state["google_oauth_url"] = url
-                else:
-                    st.error("Could not start Google OAuth. No redirect URL returned.")
             except Exception as e:
                 st.error(f"Google OAuth error: {e}")
 
         if st.session_state.get("google_oauth_url"):
-            st.link_button(
-                "Open Google Sign-In",
-                st.session_state["google_oauth_url"],
-            )
+            st.link_button("Login with Google", st.session_state["google_oauth_url"])
+        else:
+            st.button("Login with Google", disabled=True)
 
         st.markdown("---")
         

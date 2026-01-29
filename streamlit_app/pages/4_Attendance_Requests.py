@@ -348,41 +348,6 @@ with col_left:
     
     st.markdown("---")
     
-    # Weekoff Settings Section
-    with st.expander("⚙️ Weekoff Settings", expanded=False):
-        st.markdown("#### Set Your Weekoff Days")
-        st.caption("Select your weekly days off. You will not be marked as ABSENT on these days.")
-        
-        weekoff_options = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"]
-        # Convert current_weekoffs to list of strings for multiselect
-        current_weekoffs_str = [str(w) if isinstance(w, str) else w.value if hasattr(w, 'value') else str(w) for w in current_weekoffs]
-        
-        selected_weekoffs = st.multiselect(
-            "Weekoff Days",
-            weekoff_options,
-            default=current_weekoffs_str,
-            key="weekoff_multiselect"
-        )
-        
-        if st.button("💾 Save Weekoffs", key="save_weekoff", type="primary"):
-            if not selected_weekoffs:
-                st.warning("⚠️ Please select at least one weekoff day.")
-            else:
-                try:
-                    payload = {"weekoffs": selected_weekoffs}
-                    result = api_request("PATCH", "/me/weekoffs", token=token, json=payload)
-                    if result:
-                        st.success(f"✅ Weekoffs updated to: {', '.join(selected_weekoffs)}")
-                        invalidate_cache()  # Clear cache to refresh user data
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to update weekoffs: {str(e)}")
-        
-        if current_weekoffs_str:
-            st.info(f"📅 Current weekoffs: **{', '.join(current_weekoffs_str)}**")
-    
-    st.markdown("---")
-    
     box = st.container(border=True)
     with box:
         st.markdown("#### 📝 New Request Form")
@@ -401,10 +366,6 @@ with col_left:
         
         # Use form to enable automatic clearing
         with st.form("attendance_request_form", clear_on_submit=True):
-            
-            # Project Selection
-            project = st.selectbox("Project", proj_names)
-            project_id = proj_name_to_id.get(project) if project != "— none —" else None
             
             # Date Range (no default values)
             col_a, col_b = st.columns(2)
@@ -470,7 +431,6 @@ with col_left:
                         end_date = start_date
                     
                     payload = {
-                        "project_id": project_id,
                         "request_type": req_type,
                         "start_date": start_date.isoformat(),
                         "end_date": end_date.isoformat(),

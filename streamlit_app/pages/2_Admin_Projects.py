@@ -141,12 +141,14 @@ with tab1:
     if projects_data:
         total_projects = len(projects_data)
         active_projects = len([p for p in projects_data if p["is_active"]])
-        completed_projects = total_projects - active_projects
+        paused_projects = len([p for p in projects_data if not p["is_active"] and not p.get("end_date")])
+        completed_projects = len([p for p in projects_data if p.get("end_date")])
 
-        k1, k2, k3 = st.columns(3)
+        k1, k2, k3, k4 = st.columns(4)
         k1.metric("Total Projects", total_projects)
         k2.metric("Active Projects", active_projects)
-        k3.metric("Completed Projects", completed_projects)
+        k3.metric("Paused Projects", paused_projects)
+        k4.metric("Completed Projects", completed_projects)
 
     st.markdown("---")
 
@@ -154,7 +156,7 @@ with tab1:
     with c1:
         search_text = st.text_input("Search by Code or Name")
     with c2:
-        status_filter = st.selectbox("Status Filter", ["ALL","ACTIVE","COMPLETED"])
+        status_filter = st.selectbox("Status Filter", ["ALL", "ACTIVE", "PAUSED", "COMPLETED"])
 
     filtered_projects = []
     for p in projects_data:
@@ -162,14 +164,21 @@ with tab1:
             continue
         if status_filter == "ACTIVE" and not p["is_active"]:
             continue
-        if status_filter == "COMPLETED" and p["is_active"]:
+        if status_filter == "PAUSED" and (p["is_active"] or p.get("end_date")):
+            continue
+        if status_filter == "COMPLETED" and not p.get("end_date"):
             continue
         filtered_projects.append(p)
 
     if filtered_projects:
 
         df = pd.DataFrame(filtered_projects)
-        df["status"] = df["is_active"].apply(lambda x: "ACTIVE" if x else "COMPLETED")
+        df["status"] = df.apply(
+            lambda row: "COMPLETED"
+            if row.get("end_date")
+            else ("ACTIVE" if row.get("is_active") else "PAUSED"),
+            axis=1,
+        )
 
         members_count = {}
         pm_map = {}
@@ -183,7 +192,7 @@ with tab1:
         df["allocated_users"] = df["id"].map(members_count)
         df["pm_apm"] = df["id"].map(pm_map)
 
-        edit_df = df[['code','name','status','allocated_users','pm_apm','is_active','start_date','end_date','id']].copy()
+        edit_df = df[['code','name','status','allocated_users','pm_apm','start_date','end_date','id']].copy()
         edit_df['start_date'] = pd.to_datetime(edit_df['start_date']).dt.date
         edit_df['end_date'] = pd.to_datetime(edit_df['end_date']).dt.date
 
@@ -196,7 +205,10 @@ with tab1:
                 "status": st.column_config.TextColumn("Status"),
                 "allocated_users": st.column_config.NumberColumn("Allocated Users"),
                 "pm_apm": st.column_config.TextColumn("PM / APM"),
-                "is_active": st.column_config.CheckboxColumn("Active?"),
+                "status": st.column_config.SelectboxColumn(
+                    "Status",
+                    options=["ACTIVE", "PAUSED", "COMPLETED"],
+                ),
                 "start_date": st.column_config.DateColumn("Start Date"),
                 "end_date": st.column_config.DateColumn("End Date")
             },
@@ -213,13 +225,14 @@ with tab1:
                 proj_id = original_row["id"]
 
                 end_val = updates.get("end_date", original_row["end_date"])
-                raw_active = updates.get("is_active", original_row["is_active"])
+                status_val = updates.get("status", original_row["status"])
 
-                # BUSINESS FIX
-                if end_val:
-                    safe_active = False
-                else:
-                    safe_active = bool(raw_active)
+                if status_val == "COMPLETED" and not end_val:
+                    end_val = date.today()
+                if status_val in ["ACTIVE", "PAUSED"]:
+                    end_val = None
+
+                safe_active = status_val == "ACTIVE"
 
                 payload = {
                     "name": updates.get("name", original_row["name"]).strip(),

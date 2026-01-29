@@ -29,9 +29,6 @@ def _refresh_role_from_backend() -> None:
     if not token:
         return
 
-    if st.session_state.get("role_synced"):
-        return
-
     api_base_url = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
     headers = {"Authorization": f"Bearer {token}"}
     try:
@@ -44,11 +41,24 @@ def _refresh_role_from_backend() -> None:
 
     if isinstance(user, dict):
         st.session_state["user"] = user
-        st.session_state["user_role"] = user.get("role")
+        backend_role = user.get("role")
+        existing_role = st.session_state.get("user_role")
+
+        if backend_role:
+            backend_role_upper = str(backend_role).upper()
+            existing_role_upper = str(existing_role).upper() if existing_role else ""
+
+            if backend_role_upper in {"ADMIN", "MANAGER"}:
+                st.session_state["user_role"] = backend_role
+            elif existing_role_upper in {"ADMIN", "MANAGER"}:
+                # Keep elevated role if backend still reports USER
+                pass
+            else:
+                st.session_state["user_role"] = backend_role
+
         if user.get("name"):
             st.session_state["user_name"] = user.get("name")
 
-    st.session_state["role_synced"] = True
 
 
 def _get_user_role() -> str:

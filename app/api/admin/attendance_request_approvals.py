@@ -8,6 +8,7 @@ from app.db.session import get_db
 from app.models.attendance_request import AttendanceRequest
 from app.models.attendance_request_approval import AttendanceRequestApproval
 from app.models.attendance_daily import AttendanceDaily
+from app.models.project import Project
 from app.schemas.attendance_request_approval import (
     AttendanceRequestApprovalCreate,
     AttendanceRequestApprovalUpdate,
@@ -15,6 +16,7 @@ from app.schemas.attendance_request_approval import (
 )
 from app.core.dependencies import get_current_user
 from app.models.user import User
+from app.services.notification_service import send_attendance_request_decision_email
 
 router = APIRouter(
     prefix="/admin/attendance-request-approvals",
@@ -28,7 +30,7 @@ router = APIRouter(
 def create_approval(
     payload: AttendanceRequestApprovalCreate,
     db: Session = Depends(get_db),
-    # current_user: User = Depends(get_current_user) # Uncomment if you want to track who clicked the button
+    current_user: User = Depends(get_current_user)
 ):
     """
     Creates an approval log AND updates the parent request status.
@@ -48,7 +50,10 @@ def create_approval(
 
     # 3. Create the Approval Log
     # Note: exclude_unset=True ensures we don't accidentally wipe defaults if using Pydantic v2
-    approval = AttendanceRequestApproval(**payload.model_dump(exclude_unset=True))
+    approval_data = payload.model_dump(exclude_unset=True)
+    # Always use the authenticated user as the approver to avoid FK mismatches
+    approval_data["approver_user_id"] = current_user.id
+    approval = AttendanceRequestApproval(**approval_data)
     
     # 4. CRITICAL: Update the Parent Request Status
     request.status = payload.decision  # 'APPROVED' or 'REJECTED'
@@ -56,7 +61,7 @@ def create_approval(
 
     # 5. AUTOMATION: If Approved, update the Daily Roster (AttendanceDaily)
     # This ensures the user shows as "LEAVE" or "WFH" on the dashboard instead of "ABSENT"
-    if payload.decision == "APPROVED":
+    if payload.decision == "APPROVED" and request.project_id:
         # Check if daily entry already exists to avoid duplicates
         existing_daily = db.query(AttendanceDaily).filter(
             AttendanceDaily.user_id == request.user_id,
@@ -86,7 +91,26 @@ def create_approval(
     db.add(approval)
     db.commit()
     db.refresh(approval)
-    
+
+    # Send notification email (non-blocking failures)
+    request_user = db.query(User).filter(User.id == request.user_id).first()
+    if request_user and request_user.email:
+        project_names = None
+        if request.project_id:
+            project = db.query(Project).filter(Project.id == request.project_id).first()
+            if project and project.name:
+                project_names = project.name
+        send_attendance_request_decision_email(
+            user_email=request_user.email,
+            user_name=request_user.name or request_user.email,
+            decision=payload.decision,
+            comment=payload.comment,
+            request_type=request.request_type,
+            start_date=str(request.start_date),
+            end_date=str(request.end_date),
+            project_names=project_names,
+        )
+
     return approval
 
 # ------------------------------------------------------------------

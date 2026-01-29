@@ -6,6 +6,7 @@ bcrypt==4.0.1
 pydantic
 supabase
 streamlit
+resend
 
  
 certifi==2025.11.12

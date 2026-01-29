@@ -8,6 +8,7 @@ import enum
 # 👇 Python enum matching Postgres enum
 class UserRole(enum.Enum):
     ADMIN = "ADMIN"
+    MANAGER = "MANAGER"
     USER = "USER"
     MANAGER = "MANAGER"
 
