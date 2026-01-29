@@ -8,6 +8,7 @@ from enum import Enum
 class UserRole(str, Enum):
     ADMIN = "ADMIN"
     USER = "USER"
+    MANAGER = "MANAGER"
 
 class UsersAdminSearchFilters(BaseModel):
     """
@@ -56,16 +57,15 @@ class UserResponse(BaseModel):
     role: UserRole
     is_active: bool
 
-    work_role: Optional[str]
-    doj: Optional[date]
-    default_shift_id: Optional[UUID]
-    quality_rating: Optional[str]
-    rpm_user_id: Optional[UUID]
-    soul_id: Optional[UUID]
-    weekoffs: Optional[List[WeekoffDays]]  # List to support multiple weekoffs
+    work_role: Optional[str] = None
+    doj: Optional[date] = None
+    default_shift_id: Optional[UUID] = None
+    rpm_user_id: Optional[UUID] = None
+    soul_id: Optional[UUID] = None
+    weekoffs: Optional[List[WeekoffDays]] = None  # List to support multiple weekoffs
 
     created_at: datetime
-    updated_at: Optional[datetime]
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

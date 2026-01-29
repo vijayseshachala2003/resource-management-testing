@@ -5,9 +5,10 @@ from sqlalchemy import func
 from datetime import date, datetime
 
 from app.db.session import SessionLocal
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.project import Project
 from app.models.history import TimeHistory
+from app.models.project_owners import ProjectOwner
 from app.schemas.dashboard import (
     GlobalStatsResponse, 
     LiveWorkerResponse, 
@@ -98,11 +99,34 @@ def get_pending_approvals(
 ):
     """
     Returns completed sessions that are waiting for manager approval.
+    Only shows approvals for projects where the current user is a project manager or admin.
     """
-    pending_items = db.query(TimeHistory).filter(
+    # Base query for pending items
+    query = db.query(TimeHistory).filter(
         TimeHistory.status == "PENDING",
         TimeHistory.clock_out_at != None
-    ).order_by(TimeHistory.clock_in_at.desc()).all()
+    )
+    
+    # Filter by project manager or admin
+    if current_user.role == UserRole.ADMIN:
+        # Admin sees all pending approvals
+        pending_items = query.order_by(TimeHistory.clock_in_at.desc()).all()
+    else:
+        # Project managers only see approvals for their projects
+        # Get list of project IDs where current user is a project owner
+        managed_projects = db.query(ProjectOwner.project_id).filter(
+            ProjectOwner.user_id == current_user.id
+        ).all()
+        managed_project_ids = [p[0] for p in managed_projects]
+        
+        if not managed_project_ids:
+            # User is not a project manager, return empty list
+            return []
+        
+        # Filter approvals to only show those from managed projects
+        pending_items = query.filter(
+            TimeHistory.project_id.in_(managed_project_ids)
+        ).order_by(TimeHistory.clock_in_at.desc()).all()
     
     results = []
     for item in pending_items:
