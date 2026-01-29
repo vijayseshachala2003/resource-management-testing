@@ -147,25 +147,6 @@ with tab1:
     # Fetch all pending
     pending = authenticated_request("GET", "/admin/attendance-requests/", params={"status": "PENDING"}) or []
     
-    # Get current user info to filter by their managed team
-    me = authenticated_request("GET", "/me/")
-    my_role = me.get("role", "").upper() if me else ""
-    
-    # If not admin, filter to only show requests from team members the manager is responsible for
-    if my_role != "ADMIN":
-        # Get projects managed by this user
-        my_projects = authenticated_request("GET", "/project_manager/projects") or []
-        
-        # Get all team member IDs from those projects
-        my_team_ids = set()
-        for proj in my_projects:
-            members = authenticated_request("GET", f"/project_manager/projects/{proj['id']}/members") or []
-            for m in members:
-                my_team_ids.add(str(m.get('id')))
-        
-        # Filter pending requests to only those from my team
-        pending = [r for r in pending if str(r.get('user_id')) in my_team_ids]
-    
     # Client-side filtering
     if filter_type != "All":
         pending = [r for r in pending if r.get('request_type') == filter_type]

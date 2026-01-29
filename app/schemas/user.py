@@ -6,6 +6,7 @@ from enum import Enum
 
 class UserRole(str, Enum):
     ADMIN = "ADMIN"
+    MANAGER = "MANAGER"
     USER = "USER"
 
 class WorkRole(str, Enum):
