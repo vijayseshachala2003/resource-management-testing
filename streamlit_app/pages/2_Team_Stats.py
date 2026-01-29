@@ -374,9 +374,11 @@ user_total_hours_week = sum(float(m.get("hours_worked", 0) or 0) for m in user_w
 user_days_with_data = len(set(m.get("metric_date") for m in user_weekly_metrics if m.get("metric_date")))
 user_avg_hours_per_day = user_total_hours_week / 7 if user_days_with_data > 0 else 0  # Average over 7 days
 
-# Get team's metrics for the week
-team_weekly_metrics = []
-for team_member_id in team_member_ids:
+# Get teammates' metrics for the week (excluding current user)
+teammates_weekly_metrics = []
+teammate_ids = [tid for tid in team_member_ids if str(tid).lower().strip() != str(current_user_id).lower().strip()] if current_user_id else list(team_member_ids)
+
+for team_member_id in teammate_ids:
     member_metrics = get_user_daily_metrics_cached(
         user_id=team_member_id,
         start_date_str=week_start_str,
@@ -387,12 +389,12 @@ for team_member_id in team_member_ids:
         if isinstance(m, dict):
             project_id = str(m.get("project_id", ""))
             if project_id in selected_project_ids:
-                team_weekly_metrics.append(m)
+                teammates_weekly_metrics.append(m)
 
-# Calculate team's average hours per day for the week
+# Calculate teammates' average hours per day for the week
 # Group by user and date to avoid double counting across projects
-team_hours_by_user_date = {}
-for m in team_weekly_metrics:
+teammates_hours_by_user_date = {}
+for m in teammates_weekly_metrics:
     if isinstance(m, dict):
         user_id = str(m.get("user_id") or m.get("id") or "")
         metric_date = m.get("metric_date")
@@ -400,12 +402,12 @@ for m in team_weekly_metrics:
         if user_id and metric_date:
             key = f"{user_id}_{metric_date}"
             # Sum hours if user worked on multiple projects on same day
-            team_hours_by_user_date[key] = team_hours_by_user_date.get(key, 0) + hours
+            teammates_hours_by_user_date[key] = teammates_hours_by_user_date.get(key, 0) + hours
 
-# Calculate total hours for all team members across the week
-team_total_hours_week = sum(team_hours_by_user_date.values())
-# Average hours per person per day = total hours / (number of team members * 7 days)
-team_avg_hours_per_day = team_total_hours_week / (len(team_member_ids) * 7) if team_member_ids else 0
+# Calculate total hours for teammates across the week
+teammates_total_hours_week = sum(teammates_hours_by_user_date.values())
+# Average hours per teammate per day = total hours / (number of teammates * 7 days)
+teammates_avg_hours_per_day = teammates_total_hours_week / (len(teammate_ids) * 7) if teammate_ids else 0
 
 # Display Average Hours Metrics
 st.markdown("### ⏱️ Average Working Hours")
@@ -420,9 +422,9 @@ with col1:
 
 with col2:
     st.metric(
-        label="Team Average Hours/Day (This Week)",
-        value=f"{team_avg_hours_per_day:.2f} hrs",
-        help=f"Average working hours per day per team member for the week of {week_start.strftime('%b %d')} - {week_end.strftime('%b %d, %Y')}"
+        label="Teammates Average Hours/Day (This Week)",
+        value=f"{teammates_avg_hours_per_day:.2f} hrs",
+        help=f"Average working hours per day for your teammates (excluding you) for the week of {week_start.strftime('%b %d')} - {week_end.strftime('%b %d, %Y')}"
     )
 
 st.markdown("---")
