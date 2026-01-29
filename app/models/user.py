@@ -10,7 +10,6 @@ class UserRole(enum.Enum):
     ADMIN = "ADMIN"
     MANAGER = "MANAGER"
     USER = "USER"
-    MANAGER = "MANAGER"
 
 class WorkRole(enum.Enum):
     CONTRACTOR = "CONTRACTOR"

@@ -1299,7 +1299,11 @@ with tab3:
         st.session_state.allocation_popup_data = None
     
     # Show popup only when explicitly triggered (not on page load)
-    if st.session_state.get("show_allocation_popup") and st.session_state.get("allocation_popup_data"):
+    # Only show allocation dialog if no other dialogs are active
+    if (st.session_state.get("show_allocation_popup") and 
+        st.session_state.get("allocation_popup_data") and
+        not st.session_state.get("show_user_list") and
+        not st.session_state.get("show_project_list")):
         popup_data = st.session_state.allocation_popup_data
         filtered_popup = popup_data["filtered"]
         project_id_popup = popup_data["project_id"]
