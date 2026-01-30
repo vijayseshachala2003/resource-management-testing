@@ -1,0 +1,1555 @@
+import streamlit as st
+from datetime import date, datetime, timedelta
+import requests
+import csv
+import io
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
+import os
+from dotenv import load_dotenv
+from typing import Dict, List, Optional
+import time
+from role_guard import get_user_role
+import base64
+
+load_dotenv()
+
+# ---------------------------------------------------------
+# PAGE CONFIG
+# ---------------------------------------------------------
+st.set_page_config(
+    page_title="Project Resource Allocation",
+    layout="wide",
+)
+
+# Basic role check (navigation already filters, but this is extra security)
+role = get_user_role()
+if not role or role not in ["ADMIN", "MANAGER"]:
+    st.error("Access denied. Admin or Manager role required.")
+    st.stop()
+
+# Add CSS and JavaScript to style dialogs: 90vw width, centered, prevent double scroll
+st.markdown("""
+<style>
+/* Target all possible dialog selectors - center and set width */
+div[data-testid="stDialog"],
+section[data-testid="stDialog"] {
+    width: 90vw !important;
+    max-width: 90vw !important;
+    min-width: 90vw !important;
+    position: fixed !important;
+    left: 50% !important;
+    top: 35% !important;
+    transform: translate(-50%, -50%) !important;
+    z-index: 10000 !important;
+    overflow: visible !important;
+    max-height: none !important;
+}
+
+/* Prevent scroll on dialog containers - fix double scroll */
+div[data-testid="stDialog"] > div,
+section[data-testid="stDialog"] > div {
+    width: 90vw !important;
+    max-width: 90vw !important;
+    min-width: 90vw !important;
+    overflow-y: hidden !important;
+    overflow-x: hidden !important;
+    max-height: none !important;
+}
+
+/* Prevent scroll on inner sections */
+div[data-testid="stDialog"] > section,
+section[data-testid="stDialog"] > section {
+    overflow: hidden !important;
+    max-height: none !important;
+}
+
+/* Prevent body scroll when dialog is open */
+body:has(div[data-testid="stDialog"]) {
+    overflow: hidden !important;
+}
+
+/* Allow scrolling only for dataframes inside dialog */
+div[data-testid="stDialog"] [data-testid="stDataFrame"],
+section[data-testid="stDialog"] [data-testid="stDataFrame"] {
+    max-height: 60vh !important;
+    overflow-y: auto !important;
+    overflow-x: auto !important;
+}
+
+/* Remove any nested scroll containers */
+div[data-testid="stDialog"] [style*="overflow"],
+section[data-testid="stDialog"] [style*="overflow"] {
+    overflow: visible !important;
+}
+</style>
+<script>
+// Apply width aggressively - target all dialog elements
+function applyDialogWidth() {
+    var dialogs = document.querySelectorAll('div[data-testid="stDialog"], section[data-testid="stDialog"], div[role="dialog"], section[role="dialog"]');
+    dialogs.forEach(function(dialog) {
+        // Set width using multiple methods
+        dialog.style.width = '90vw';
+        dialog.style.maxWidth = '90vw';
+        dialog.style.minWidth = '90vw';
+        dialog.style.setProperty('width', '90vw', 'important');
+        dialog.style.setProperty('max-width', '90vw', 'important');
+        dialog.style.setProperty('min-width', '90vw', 'important');
+        
+        // Also set on first child if it exists
+        if (dialog.firstElementChild) {
+            dialog.firstElementChild.style.setProperty('width', '90vw', 'important');
+            dialog.firstElementChild.style.setProperty('max-width', '90vw', 'important');
+        }
+    });
+}
+
+// Run immediately and on interval
+applyDialogWidth();
+setInterval(applyDialogWidth, 50);
+
+// Run when DOM changes
+var observer = new MutationObserver(applyDialogWidth);
+observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
+</script>
+""", unsafe_allow_html=True)
+
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+
+WORK_ROLE_OPTIONS = [
+    "ANNOTATION",
+    "QC",
+    "LIVE_QC",
+    "RETRO_QC",
+    "PM",
+    "APM",
+    "RPM",
+]
+
+# ---------------------------------------------------------
+# HELPER FUNCTIONS
+# ---------------------------------------------------------
+def format_duration_hhmmss(total_seconds: int) -> str:
+    if total_seconds <= 0:
+        return "-"
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+def format_time(ts):
+    if not ts:
+        return "-"
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", ""))
+        return dt.strftime("%I:%M %p")
+    except Exception:
+        return "-"
+
+def calculate_hours_worked(clock_in, clock_out, minutes_worked):
+    if not clock_in or not clock_out:
+        return "-"
+    if minutes_worked and minutes_worked > 0:
+        total_seconds = int(minutes_worked * 60)
+        return format_duration_hhmmss(total_seconds)
+    try:
+        ci = datetime.fromisoformat(str(clock_in).replace("Z", ""))
+        co = datetime.fromisoformat(str(clock_out).replace("Z", ""))
+        total_seconds = int((co - ci).total_seconds())
+        return format_duration_hhmmss(total_seconds)
+    except Exception:
+        return "-"
+
+def aggregate_by_user(rows):
+    aggregated = {}
+    for r in rows:
+        uid = r["user_id"]
+        if uid not in aggregated:
+            aggregated[uid] = r.copy()
+        else:
+            existing = aggregated[uid]
+            if r.get("first_clock_in") and (
+                not existing.get("first_clock_in")
+                or r["first_clock_in"] < existing["first_clock_in"]
+            ):
+                existing["first_clock_in"] = r["first_clock_in"]
+            if r.get("last_clock_out") and (
+                not existing.get("last_clock_out")
+                or r["last_clock_out"] > existing["last_clock_out"]
+            ):
+                existing["last_clock_out"] = r["last_clock_out"]
+            existing["minutes_worked"] = (
+                (existing.get("minutes_worked") or 0)
+                + (r.get("minutes_worked") or 0)
+            )
+            if existing["attendance_status"] != "PRESENT":
+                existing["attendance_status"] = r["attendance_status"]
+    return list(aggregated.values())
+
+def export_csv(filename, rows):
+    if not rows:
+        st.warning("No data to export.")
+        return
+    csv_rows = []
+    for r in rows:
+        row = r.copy()
+        if "minutes_worked" in row and row.get("minutes_worked"):
+            row["hours_worked"] = format_duration_hhmmss(int(row["minutes_worked"] * 60))
+        row.pop("minutes_worked", None)
+        csv_rows.append(row)
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=csv_rows[0].keys())
+    writer.writeheader()
+    writer.writerows(csv_rows)
+    st.download_button(
+        label="⬇️ Download CSV",
+        data=buffer.getvalue(),
+        file_name=filename,
+        mime="text/csv"
+    )
+
+# ---------------------------------------------------------
+# API HELPERS
+# ---------------------------------------------------------
+# Create a session for connection pooling
+@st.cache_resource
+def get_requests_session():
+    """Create a requests session with connection pooling"""
+    session = requests.Session()
+    # Configure adapter with connection pooling
+    # Don't retry on 500 errors - if server is broken, retrying won't help
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=10,
+        pool_maxsize=10,
+        max_retries=requests.adapters.Retry(
+            total=1,  # Reduced retries
+            backoff_factor=0.3,
+            status_forcelist=[502, 503, 504],  # Removed 500 - don't retry on server errors
+            allowed_methods=["GET", "POST"]
+        )
+    )
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    return session
+
+def authenticated_request(method, endpoint, params=None, json_data=None, retries=2, show_error=True):
+    """Make authenticated API request with retry logic and connection pooling.
+    If show_error=False, errors are logged but not shown in the UI (for optional/fallback calls)."""
+    token = st.session_state.get("token")
+    if not token:
+        st.warning("🔒 Please login first.")
+        if st.button("➡️ Go to Login"):
+            st.session_state.clear()
+            st.rerun()
+        st.stop()
+    
+    headers = {"Authorization": f"Bearer {token}"}
+    session = get_requests_session()
+    
+    for attempt in range(retries + 1):
+        try:
+            if method.upper() == "POST" and json_data:
+                r = session.post(
+                    f"{API_BASE_URL}{endpoint}",
+                    headers=headers,
+                    params=params,
+                    json=json_data,
+                    timeout=(10, 30)  # (connect timeout, read timeout)
+                )
+            else:
+                r = session.request(
+                    method,
+                    f"{API_BASE_URL}{endpoint}",
+                    headers=headers,
+                    params=params,
+                    timeout=(10, 30)
+                )
+            if r.status_code >= 400:
+                error_detail = f"API Error {r.status_code}"
+                try:
+                    error_response = r.json()
+                    if isinstance(error_response, dict) and "detail" in error_response:
+                        error_detail = error_response["detail"]
+                    print(f"[API Error Response] {method} {endpoint}: {error_response}")
+                except:
+                    error_detail = r.text[:500] if r.text else f"HTTP {r.status_code}"
+                    print(f"[API Error Text] {method} {endpoint}: {error_detail}")
+                
+                if attempt < retries:
+                    time.sleep(0.5 * (attempt + 1))  # Exponential backoff
+                    continue
+                # Log error for debugging
+                print(f"[API Error] {method} {endpoint}: {error_detail}")
+                if show_error:
+                    st.error(f"⚠️ API Error: {error_detail}")
+                return None
+            return r.json()
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, 
+                ConnectionResetError, requests.exceptions.ChunkedEncodingError) as e:
+            if attempt < retries:
+                # Exponential backoff: 1s, 2s, 4s
+                wait_time = min(2 ** attempt, 4)
+                time.sleep(wait_time)
+                continue
+            print(f"[Connection Error] {method} {endpoint}: {str(e)}")
+            if show_error:
+                st.error(f"⚠️ Connection Error: {str(e)}")
+            return None
+        except requests.exceptions.HTTPError as e:
+            # Handle HTTP errors (like too many 500s)
+            if attempt < retries:
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            error_msg = str(e)
+            print(f"[HTTP Error] {method} {endpoint}: {error_msg}")
+            if show_error:
+                if "500" in error_msg or "too many" in error_msg.lower():
+                    st.error(f"⚠️ **API Server Error**: The API server at `{API_BASE_URL}` is returning errors. Please check:\n"
+                            f"1. Is the API server running?\n"
+                            f"2. Check API server logs for errors\n"
+                            f"3. Verify database connection\n"
+                            f"4. Check API server console for stack traces")
+                else:
+                    st.error(f"⚠️ Request Error: {error_msg}")
+            return None
+        except Exception as e:
+            if attempt < retries:
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            error_msg = str(e)
+            print(f"[Request Error] {method} {endpoint}: {error_msg}")
+            if show_error:
+                if "500" in error_msg or "too many" in error_msg.lower() or "ConnectionPool" in error_msg:
+                    st.error(f"⚠️ **API Server Issue**: The API server appears to be having problems.\n"
+                            f"- Server: `{API_BASE_URL}`\n"
+                            f"- Error: {error_msg}\n\n"
+                            f"**Please check:**\n"
+                            f"1. Is the API server running? (Check terminal/console where you started it)\n"
+                            f"2. Check API server logs for error messages\n"
+                            f"3. Restart the API server if needed")
+                else:
+                    st.error(f"⚠️ Request Error: {error_msg}")
+            return None
+    return None
+
+# Cached API functions
+@st.cache_data(ttl=300, show_spinner="Loading projects...")
+def get_all_projects_cached():
+    """Cache projects list for 5 minutes"""
+    return authenticated_request("GET", "/admin/projects") or []
+
+@st.cache_data(ttl=300, show_spinner="Loading user names...")
+def get_user_name_mapping():
+    """Cache user name mapping for 5 minutes"""
+    users = authenticated_request("GET", "/admin/users/", params={"limit": 1000}, show_error=False)
+    if not users:
+        print(f"[DEBUG] get_user_name_mapping: API returned empty, returning empty dict")
+        return {}
+    mapping = {str(user["id"]): user.get("name", "Unknown") for user in users if isinstance(user, dict)}
+    print(f"[DEBUG] get_user_name_mapping: Created mapping with {len(mapping)} users")
+    return mapping
+
+def get_user_name_mapping_from_data(users_data):
+    """Create user name mapping from existing users_data (fallback when API fails)
+    Stores both original and lowercase versions of IDs for better matching"""
+    if not users_data:
+        print(f"[DEBUG] get_user_name_mapping_from_data: No users_data provided")
+        return {}
+    mapping = {}
+    for user in users_data:
+        if isinstance(user, dict):
+            # Try multiple ways to get user_id
+            user_id = str(user.get("id") or user.get("user_id") or "")
+            user_name = user.get("name", "Unknown")
+            if user_id and user_id != "None" and user_id != "":
+                # Store with both original and lowercase key for better matching
+                mapping[user_id] = user_name
+                mapping[user_id.lower()] = user_name  # Also store lowercase version
+                mapping[user_id.upper()] = user_name  # Also store uppercase version
+            else:
+                print(f"[DEBUG] get_user_name_mapping_from_data: Skipping user with no valid ID: {user}")
+    print(f"[DEBUG] get_user_name_mapping_from_data: Created mapping with {len(set(mapping.values()))} unique users (with {len(mapping)} ID variants)")
+    if len(mapping) > 0:
+        # Get unique user names
+        unique_names = list(set(mapping.values()))[:3]
+        print(f"[DEBUG] Sample user names: {unique_names}")
+    return mapping
+
+@st.cache_data(ttl=60, show_spinner="Loading user data...")
+def get_users_with_filter_cached(selected_date_str, silent_fail=False):
+    """Cache user data for 1 minute. If silent_fail=True, don't show API error in UI (for fallback flow)."""
+    response = authenticated_request(
+        "POST", 
+        "/admin/users/users_with_filter",
+        json_data={"date": selected_date_str},
+        show_error=not silent_fail
+    )
+    # API returns {"items": [...], "meta": {...}}
+    if response and isinstance(response, dict) and "items" in response:
+        items = response["items"]
+        print(f"[DEBUG] Primary API: Got {len(items)} users from users_with_filter")
+        return items
+    # If response is None, API call failed (error shown only if not silent_fail)
+    print(f"[DEBUG] Primary API: Failed or returned empty. Response: {response}")
+    return []
+
+def get_users_fallback():
+    """Fallback: Get users from simpler /admin/users/ endpoint if users_with_filter fails"""
+    users = authenticated_request("GET", "/admin/users/", params={"limit": 1000}, show_error=False) or []
+    print(f"[DEBUG] Fallback: Got {len(users)} users from /admin/users/ endpoint")
+    # Convert to same format as users_with_filter returns
+    # Add default values for fields that users_with_filter provides
+    result = []
+    for user in users:
+        if isinstance(user, dict):
+            # Handle role - could be enum, string, or enum value
+            role = user.get("role")
+            if hasattr(role, 'value'):
+                role_value = role.value
+            elif hasattr(role, '__str__'):
+                role_value = str(role)
+            else:
+                role_value = role if role else "USER"
+            
+            result.append({
+                "id": user.get("id"),
+                "name": user.get("name", ""),
+                "email": user.get("email", ""),
+                "role": role_value,  # Use actual role, not default
+                "work_role": user.get("work_role", ""),
+                "is_active": user.get("is_active", True),
+                "allocated_projects": 0,  # We don't have this from simple endpoint
+                "today_status": "UNKNOWN",  # We don't have attendance from simple endpoint
+                "shift_id": user.get("default_shift_id"),
+                "shift_name": None,
+                "rpm_user_id": user.get("rpm_user_id"),
+            })
+    print(f"[DEBUG] Fallback: Converted to {len(result)} user objects")
+    return result
+
+@st.cache_data(ttl=60, show_spinner="Loading metrics...")
+def get_project_metrics_cached(project_id, start_date_str, end_date_str):
+    """Cache project metrics for 1 minute"""
+    return authenticated_request("GET", "/admin/metrics/user_daily/", params={
+        "project_id": project_id,
+        "start_date": start_date_str,
+        "end_date": end_date_str
+    }) or []
+
+@st.cache_data(ttl=60, show_spinner="Loading allocation data...")
+def get_project_allocation_cached(project_id, target_date_str, only_active=True):
+    """Cache project allocation for 1 minute
+    
+    Args:
+        project_id: UUID string of the project
+        target_date_str: Date string in YYYY-MM-DD format
+        only_active: If True, only return active project members (default: True)
+    """
+    # Convert project_id to string if it's a UUID object
+    project_id_str = str(project_id) if project_id else None
+    if not project_id_str:
+        print(f"[ERROR] get_project_allocation_cached: project_id is None or empty")
+        return None
+    
+    result = authenticated_request("GET", "/admin/project-resource-allocation/", params={
+        "project_id": project_id_str,
+        "target_date": target_date_str,
+        "only_active": only_active
+    }, show_error=False)  # Don't show error in UI, we'll handle it in the calling code
+    
+    if result:
+        print(f"[DEBUG] get_project_allocation_cached: project_id={project_id_str}, date={target_date_str}, only_active={only_active}, "
+              f"total_resources={result.get('total_resources')}, resources_count={len(result.get('resources', []))}")
+    else:
+        print(f"[DEBUG] get_project_allocation_cached: project_id={project_id_str}, date={target_date_str}, API returned None")
+    return result
+
+
+# ---------------------------------------------------------
+# AUTH GUARD
+# ---------------------------------------------------------
+if "token" not in st.session_state:
+    st.warning("🔒 Please login first from the main page.")
+    st.stop()
+
+authenticated_request("GET", "/me/")
+
+# ---------------------------------------------------------
+# INITIALIZE POPUP STATES (Reset on page load)
+# ---------------------------------------------------------
+# Use a unique key to detect fresh page loads
+if "allocation_page_init" not in st.session_state:
+    st.session_state.allocation_page_init = True
+    # Reset all popup states on fresh page load
+    st.session_state.show_user_list = None
+    st.session_state.user_list_data = []
+    st.session_state.show_project_list = None
+    st.session_state.project_list_data = None
+    st.session_state.show_allocation_popup = False
+    st.session_state.allocation_popup_data = None
+    if "selected_role" in st.session_state:
+        st.session_state.selected_role = None
+
+# ---------------------------------------------------------
+# HEADER
+# ---------------------------------------------------------
+st.title("📊 Project Resource Allocation Dashboard")
+st.caption("Comprehensive resource allocation, attendance, and productivity overview")
+st.markdown("---")
+
+# ---------------------------------------------------------
+# DATE SELECTOR (Global)
+# ---------------------------------------------------------
+selected_date = st.date_input("Select Date", value=date.today(), max_value=date.today(), key="allocation_date")
+
+# ---------------------------------------------------------
+# TABS
+# ---------------------------------------------------------
+tab1, tab2, tab3 = st.tabs(["📊 Overview Dashboard", "📈 Visualizations", "🔍 Detailed Project View"])
+
+# ==========================================
+# TAB 1: OVERVIEW DASHBOARD
+# ==========================================
+with tab1:
+    # Fetch all users with role='USER' using cached function
+    # Use silent_fail=True so we don't show API error when fallback will succeed
+    users_data = get_users_with_filter_cached(selected_date.isoformat(), silent_fail=True)
+    print(f"[DEBUG] After primary API: users_data length = {len(users_data) if users_data else 0}")
+    
+    # If users API failed, try fallback: get users from simpler endpoint
+    used_fallback = False
+    if not users_data:
+        print(f"[DEBUG] Primary API returned empty, trying fallback...")
+        # Clear cache for primary API to force fresh call next time
+        get_users_with_filter_cached.clear()
+        users_data = get_users_fallback()
+        print(f"[DEBUG] After fallback: users_data length = {len(users_data) if users_data else 0}")
+        if users_data:
+            used_fallback = True
+            st.info(f"ℹ️ Showing {len(users_data)} user(s) from basic user list (detailed filter unavailable).")
+        else:
+            # If fallback also fails, try the user name mapping endpoint which we know works
+            print(f"[DEBUG] Fallback also empty, trying get_user_name_mapping...")
+            name_mapping = get_user_name_mapping()
+            if name_mapping:
+                # Convert name mapping back to user list format
+                users_data = []
+                for user_id, name in name_mapping.items():
+                    users_data.append({
+                        "id": user_id,
+                        "name": name,
+                        "email": "",
+                        "role": "USER",  # Assume USER role
+                        "work_role": "",
+                        "is_active": True,
+                        "allocated_projects": 0,
+                        "today_status": "UNKNOWN",
+                        "shift_id": None,
+                        "shift_name": None,
+                        "rpm_user_id": None,
+                    })
+                print(f"[DEBUG] Got {len(users_data)} users from name mapping")
+                if users_data:
+                    st.info(f"ℹ️ Showing {len(users_data)} user(s) from user name list.")
+    
+    # Ensure users_data is a list of dictionaries
+    if not isinstance(users_data, list):
+        users_data = []
+    
+    # Debug: Show what we got
+    if not users_data:
+        st.error(f"⚠️ **No users data available**\n\n"
+                f"The API server at `{API_BASE_URL}` is not responding correctly. All endpoints failed:\n"
+                f"- Primary endpoint: `/admin/users/users_with_filter` ❌\n"
+                f"- Fallback endpoint: `/admin/users/` ❌\n\n"
+                f"**This indicates the API server has a problem.** Please:\n"
+                f"1. Check if the API server is running\n"
+                f"2. Check API server terminal/console for error messages\n"
+                f"3. Verify the API server can connect to the database\n"
+                f"4. Restart the API server\n\n"
+                f"*The page cannot function without a working API server.*")
+        print(f"[DEBUG] No users_data returned. Primary API failed, fallback also returned empty.")
+    
+    # Filter users with role='USER' - handle both string and enum role values
+    user_role_users = []
+    for u in users_data:
+        if not isinstance(u, dict):
+            continue  # Skip non-dict items
+        role = u.get("role")
+        # Handle role as string, enum, or enum value
+        if hasattr(role, 'value'):
+            role_str = str(role.value).upper()
+        else:
+            role_str = str(role).upper() if role else ""
+        
+        # Only print first few for debugging
+        if len(user_role_users) < 3:
+            print(f"[DEBUG] User {u.get('name', 'Unknown')}: role={role}, role_str={role_str}")
+        
+        if role_str == "USER":
+            user_role_users.append(u)
+    
+    # Debug: Show filtering results
+    if users_data and not user_role_users:
+        st.warning(f"⚠️ Found {len(users_data)} user(s) but none have role='USER'. Showing all users instead.")
+        # If no USER role users found, show all users (maybe they're ADMIN or have different role format)
+        user_role_users = users_data
+        sample_roles = [str(u.get('role', 'N/A')) for u in users_data[:5]]
+        print(f"[DEBUG] No users with role='USER' found. Roles found: {sample_roles}")
+    
+    # Calculate counts
+    total_users = len(user_role_users)
+    print(f"[DEBUG] Final total_users count: {total_users}")
+    print(f"[DEBUG] Sample user data: {user_role_users[0] if user_role_users else 'No users'}")
+    
+    allocated_users = [u for u in user_role_users if u.get("allocated_projects", 0) > 0]
+    not_allocated_users = [u for u in user_role_users if u.get("allocated_projects", 0) == 0]
+    
+    # Categorize users by status - check all possible statuses
+    # Note: UNKNOWN is no longer used - default is ABSENT if not marked as present
+    present_users = []
+    absent_users = []
+    leave_users = []
+    wfh_users = []
+    other_status_users = []
+    
+    for u in user_role_users:
+        status = u.get("today_status")
+        # Handle None, empty string, and missing key - default to ABSENT
+        if not status or status == "":
+            absent_users.append(u)  # Default to ABSENT if no status
+        elif status == "PRESENT":
+            present_users.append(u)
+        elif status == "ABSENT":
+            absent_users.append(u)
+        elif status == "LEAVE":
+            leave_users.append(u)
+        elif status == "WFH":
+            wfh_users.append(u)
+        else:
+            # Any other status value (shouldn't happen, but handle gracefully)
+            other_status_users.append(u)
+    
+    # Calculate counts for display
+    present_count = len(present_users)
+    absent_count = len(absent_users)
+    leave_count = len(leave_users)
+    wfh_count = len(wfh_users)
+    other_status_count = len(other_status_users)
+    # Verify: total should equal all statuses combined (no more UNKNOWN)
+    calculated_total = present_count + absent_count + leave_count + wfh_count + other_status_count
+    
+    # Create user name mapping from the data we already have (fallback for get_user_name_mapping)
+    # Store it in session state so other parts of the page can use it
+    # Use users_data (all users) not just user_role_users, so we have names for all users
+    if users_data:
+        name_mapping = get_user_name_mapping_from_data(users_data)
+        st.session_state.user_name_mapping_fallback = name_mapping
+        print(f"[DEBUG] Created name mapping with {len(name_mapping)} users in session state")
+        # Debug: Show a sample
+        if name_mapping:
+            sample = list(name_mapping.items())[:2]
+            print(f"[DEBUG] Sample name mapping: {sample}")
+    else:
+        st.session_state.user_name_mapping_fallback = {}
+        print(f"[DEBUG] No users_data, setting empty name mapping")
+    
+    # Debug display in UI (collapsible)
+    with st.expander("🔍 Debug Info (Click to see)", expanded=False):
+        st.write(f"**Users Data:** {len(users_data) if users_data else 0} users loaded")
+        st.write(f"**User Role Users:** {len(user_role_users)} users after filtering")
+        st.write(f"**Name Mapping:** {len(st.session_state.get('user_name_mapping_fallback', {}))} users in mapping")
+        
+        # Status breakdown debug
+        st.write(f"**Status Breakdown:**")
+        st.write(f"- Present: {present_count}")
+        st.write(f"- Absent: {absent_count}")
+        st.write(f"- Leave: {leave_count}")
+        st.write(f"- WFH: {wfh_count}")
+        st.write(f"- Other: {other_status_count}")
+        st.write(f"- Calculated Total: {calculated_total}")
+        st.write(f"- Actual Total: {total_users}")
+        
+        # Show users with missing or unexpected statuses
+        if calculated_total != total_users:
+            st.write(f"**⚠️ Users not accounted for:** {total_users - calculated_total}")
+            unaccounted = []
+            accounted_user_ids = set()
+            for u in present_users + absent_users + leave_users + wfh_users + other_status_users:
+                accounted_user_ids.add(str(u.get("id", "")))
+            for u in user_role_users:
+                if str(u.get("id", "")) not in accounted_user_ids:
+                    unaccounted.append({
+                        "id": u.get("id"),
+                        "name": u.get("name", "Unknown"),
+                        "status": u.get("today_status", "MISSING"),
+                        "has_status": "today_status" in u
+                    })
+            if unaccounted:
+                st.write(f"**Unaccounted users:**")
+                st.json(unaccounted[:5])  # Show first 5
+        
+        if users_data:
+            st.write(f"**Sample user:** {users_data[0] if users_data else 'None'}")
+        if st.session_state.get('user_name_mapping_fallback'):
+            sample_mapping = dict(list(st.session_state.user_name_mapping_fallback.items())[:3])
+            st.write(f"**Sample mapping:** {sample_mapping}")
+    
+    # SECTION 1: USER DASHBOARD
+    st.markdown("## 👥 User Overview")
+    st.markdown("Dashboard showing Total users count with role 'USER', Count of present, absent, allocated and not allocated/unknown")
+    
+    # Display clickable metrics
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    
+    # Initialize session state for modals (already initialized at top level)
+    if "show_user_list" not in st.session_state:
+        st.session_state.show_user_list = None
+    if "user_list_data" not in st.session_state:
+        st.session_state.user_list_data = []
+    
+    # Counts are already calculated above (before debug section)
+    with col1:
+        if st.button(f"**Total Users**\n\n{total_users}", use_container_width=True, key="btn_total_users"):
+            st.session_state.show_user_list = "total"
+            st.session_state.user_list_data = user_role_users
+            # Clear project list state to avoid conflicts
+            st.session_state.show_project_list = None
+            st.session_state.project_list_data = None
+            st.rerun()
+    
+    with col2:
+        if st.button(f"**Present**\n\n{present_count}", use_container_width=True, key="btn_present"):
+            st.session_state.show_user_list = "present"
+            st.session_state.user_list_data = present_users
+            # Clear project list state to avoid conflicts
+            st.session_state.show_project_list = None
+            st.session_state.project_list_data = None
+            st.rerun()
+    
+    with col3:
+        if st.button(f"**Absent**\n\n{absent_count}", use_container_width=True, key="btn_absent"):
+            st.session_state.show_user_list = "absent"
+            st.session_state.user_list_data = absent_users
+            # Clear project list state to avoid conflicts
+            st.session_state.show_project_list = None
+            st.session_state.project_list_data = None
+            st.rerun()
+    
+    with col4:
+        if st.button(f"**Allocated**\n\n{len(allocated_users)}", use_container_width=True, key="btn_allocated"):
+            st.session_state.show_user_list = "allocated"
+            st.session_state.user_list_data = allocated_users
+            # Clear project list state to avoid conflicts
+            st.session_state.show_project_list = None
+            st.session_state.project_list_data = None
+            st.rerun()
+    
+    with col5:
+        if st.button(f"**Leave**\n\n{leave_count}", use_container_width=True, key="btn_leave"):
+            st.session_state.show_user_list = "leave"
+            st.session_state.user_list_data = leave_users
+            # Clear project list state to avoid conflicts
+            st.session_state.show_project_list = None
+            st.session_state.project_list_data = None
+            st.rerun()
+    
+    with col6:
+        if st.button(f"**Not Allocated**\n\n{len(not_allocated_users)}", use_container_width=True, key="btn_not_allocated"):
+            st.session_state.show_user_list = "not_allocated"
+            st.session_state.user_list_data = not_allocated_users
+            # Clear project list state to avoid conflicts
+            st.session_state.show_project_list = None
+            st.session_state.project_list_data = None
+            st.rerun()
+    
+    # Show breakdown info: All statuses should equal Total
+    breakdown_parts = []
+    if present_count > 0:
+        breakdown_parts.append(f"Present ({present_count})")
+    if absent_count > 0:
+        breakdown_parts.append(f"Absent ({absent_count})")
+    if leave_count > 0:
+        breakdown_parts.append(f"Leave ({leave_count})")
+    if wfh_count > 0:
+        breakdown_parts.append(f"WFH ({wfh_count})")
+    if other_status_count > 0:
+        # Get unique other statuses for display
+        other_statuses = set(u.get("today_status") for u in other_status_users if u.get("today_status"))
+        breakdown_parts.append(f"Other ({other_status_count}: {', '.join(other_statuses)})")
+    
+    breakdown_str = " + ".join(breakdown_parts) if breakdown_parts else "No status data"
+    
+    if calculated_total != total_users:
+        st.warning(f"⚠️ **Mismatch:** {breakdown_str} = {calculated_total} | Total Users: {total_users} (Difference: {total_users - calculated_total})")
+    else:
+        st.caption(f"ℹ️ **Breakdown:** {breakdown_str} = {calculated_total}")
+    
+    # Show exportable list popup when a button is clicked
+    # Only show dialog if explicitly triggered (not on page reload)
+    # Check if we have valid data and it wasn't just persisted from previous session
+    if (st.session_state.show_user_list and 
+        st.session_state.user_list_data and 
+        len(st.session_state.user_list_data) > 0):
+        
+        list_title = {
+            "total": "All Users (Role: USER)",
+            "present": "Present Users",
+            "absent": "Absent Users",
+            "leave": "Leave Users",
+            "allocated": "Allocated Users",
+            "not_allocated": "Not Allocated Users"
+        }.get(st.session_state.show_user_list, "Users")
+        
+        # Only show user list dialog if project list is not active
+        if not st.session_state.show_project_list:
+            @st.dialog(f"📋 {list_title}")
+            def show_user_list_dialog():
+                df_users = pd.DataFrame(st.session_state.user_list_data)
+                if not df_users.empty:
+                    st.dataframe(df_users, use_container_width=True, height=400)
+                    export_csv(f"{list_title.replace(' ', '_')}_{selected_date}.csv", st.session_state.user_list_data)
+                else:
+                    st.info("No users found.")
+                
+                col1, col2 = st.columns([4, 1])
+                with col2:
+                    if st.button("Close", key="close_user_list", use_container_width=True, type="primary"):
+                        st.session_state.show_user_list = None
+                        st.session_state.user_list_data = []
+                        st.rerun()
+            
+            show_user_list_dialog()
+    
+    st.markdown("---")
+    
+    # SECTION 2: TOTAL COUNTERS
+    st.markdown("## 📊 Overall Statistics")
+    
+    # Fetch metrics for all projects using cached functions
+    all_projects = get_all_projects_cached()
+    project_ids = [p["id"] for p in all_projects]
+    
+    # Fetch user daily metrics for all projects (sequential with caching)
+    date_str = selected_date.isoformat()
+    total_hours = 0
+    total_tasks = 0
+    metrics_data = []
+    
+    for project_id in project_ids:
+        metrics = get_project_metrics_cached(project_id, date_str, date_str)
+        if metrics:
+            for m in metrics:
+                total_hours += float(m.get("hours_worked", 0) or 0)
+                total_tasks += int(m.get("tasks_completed", 0) or 0)
+                metrics_data.append(m)
+    
+    # Display counters
+    counter_col1, counter_col2 = st.columns(2)
+    with counter_col1:
+        st.metric("Total Hours Worked", f"{total_hours:.2f} hrs")
+    with counter_col2:
+        st.metric("Total Tasks Completed", f"{int(total_tasks)}")
+    
+    st.markdown("---")
+    
+    # SECTION 3: PROJECT CARDS
+    st.markdown("## 📁 Project Cards")
+    st.markdown("Project cards showing total number of tasks performed, total hours clocked, and count of different roles")
+    
+    # Fetch project data with metrics (using cached functions)
+    projects_with_metrics = []
+    date_str = selected_date.isoformat()
+    
+    for project in all_projects:
+        project_id = project["id"]
+        
+        # Get metrics for this project (cached)
+        project_metrics = get_project_metrics_cached(project_id, date_str, date_str)
+        
+        # Calculate totals
+        proj_total_tasks = sum(int(m.get("tasks_completed", 0) or 0) for m in project_metrics)
+        proj_total_hours = sum(float(m.get("hours_worked", 0) or 0) for m in project_metrics)
+        
+        # Count roles
+        role_counts = {}
+        for m in project_metrics:
+            role = m.get("work_role", "Unknown")
+            role_counts[role] = role_counts.get(role, 0) + 1
+        
+        # Get allocation data (cached) - try with only_active=True first (default)
+        allocation_data = get_project_allocation_cached(project_id, date_str, only_active=True)
+        
+        total_users_in_project = 0
+        if allocation_data:
+            # First, try to use total_resources from API response (most reliable)
+            if "total_resources" in allocation_data:
+                total_users_in_project = allocation_data.get("total_resources", 0)
+                print(f"[DEBUG] Project {project.get('name', project_id)}: Using total_resources={total_users_in_project} (active members only)")
+            # Fallback: calculate from resources array if total_resources not available
+            elif allocation_data.get("resources"):
+                resources = aggregate_by_user(allocation_data["resources"])
+                total_users_in_project = len(resources)
+                print(f"[DEBUG] Project {project.get('name', project_id)}: Calculated from resources={total_users_in_project}")
+            
+            # If we got 0 active members, try fetching all members (including inactive) to see if that's the issue
+            if total_users_in_project == 0:
+                print(f"[DEBUG] Project {project.get('name', project_id)} (ID: {project_id}): No active members found. "
+                      f"Trying with only_active=False to check for inactive members...")
+                # Try with inactive members (different cache key, so no need to clear)
+                allocation_data_all = get_project_allocation_cached(project_id, date_str, only_active=False)
+                if allocation_data_all and allocation_data_all.get("total_resources", 0) > 0:
+                    total_users_in_project = allocation_data_all.get("total_resources", 0)
+                    print(f"[DEBUG] Project {project.get('name', project_id)}: Found {total_users_in_project} total members (including inactive)")
+                    # Update allocation_data to include all members
+                    allocation_data = allocation_data_all
+                else:
+                    print(f"[DEBUG] Project {project.get('name', project_id)} (ID: {project_id}): total_users is 0. "
+                          f"Active: total_resources={allocation_data.get('total_resources')}, "
+                          f"resources_count={len(allocation_data.get('resources', []))}, "
+                          f"All (including inactive): total_resources={allocation_data_all.get('total_resources') if allocation_data_all else 'N/A'}")
+        else:
+            print(f"[DEBUG] Project {project.get('name', project_id)} (ID: {project_id}): allocation_data is None - API call failed or returned no data")
+            # Try with only_active=False as fallback
+            allocation_data = get_project_allocation_cached(project_id, date_str, only_active=False)
+            if allocation_data and "total_resources" in allocation_data:
+                total_users_in_project = allocation_data.get("total_resources", 0)
+                print(f"[DEBUG] Project {project.get('name', project_id)}: Fallback succeeded, found {total_users_in_project} members (including inactive)")
+            else:
+                # Show a warning in the UI for debugging (only once per project)
+                if not hasattr(st.session_state, 'allocation_warnings_shown'):
+                    st.session_state.allocation_warnings_shown = set()
+                if project_id not in st.session_state.allocation_warnings_shown:
+                    st.session_state.allocation_warnings_shown.add(project_id)
+                    st.warning(f"⚠️ Could not fetch allocation data for project: {project.get('name', project_id)}. "
+                              f"Check API server logs and verify project has members assigned.")
+        
+        projects_with_metrics.append({
+            "project": project,
+            "total_tasks": proj_total_tasks,
+            "total_hours": proj_total_hours,
+            "role_counts": role_counts,
+            "total_users": total_users_in_project,
+            "metrics": project_metrics,
+            "allocation_data": allocation_data
+        })
+    
+    # Display project cards in a grid with standardized height
+    num_cols = 3
+    for i in range(0, len(projects_with_metrics), num_cols):
+        cols = st.columns(num_cols)
+        for j, col in enumerate(cols):
+            if i + j < len(projects_with_metrics):
+                proj_data = projects_with_metrics[i + j]
+                proj = proj_data["project"]
+                
+                with col:
+                    with st.container(border=True):
+                        st.markdown(f"### {proj.get('name', 'Unknown Project')}")
+                        
+                        # Clickable metrics
+                        metric_col1, metric_col2 = st.columns(2)
+                        with metric_col1:
+                            if st.button(f"**Tasks**\n{proj_data['total_tasks']}", key=f"tasks_{proj['id']}", use_container_width=True):
+                                st.session_state.show_project_list = f"tasks_{proj['id']}"
+                                st.session_state.project_list_data = proj_data
+                                # Clear user list state to avoid conflicts
+                                st.session_state.show_user_list = None
+                                st.session_state.user_list_data = []
+                                st.rerun()
+                        with metric_col2:
+                            if st.button(f"**Hours**\n{proj_data['total_hours']:.1f}", key=f"hours_{proj['id']}", use_container_width=True):
+                                st.session_state.show_project_list = f"hours_{proj['id']}"
+                                st.session_state.project_list_data = proj_data
+                                # Clear user list state to avoid conflicts
+                                st.session_state.show_user_list = None
+                                st.session_state.user_list_data = []
+                                st.rerun()
+                        
+                        # Role counts - standardized to show max 4 roles, rest in expander
+                        st.markdown("**Role Counts:**")
+                        roles_list = list(proj_data["role_counts"].items())
+                        max_visible_roles = 4
+                        
+                        # Always show first 4 roles (or all if less than 4)
+                        visible_roles = roles_list[:max_visible_roles]
+                        for role, count in visible_roles:
+                            if st.button(f"{role}: {count}", key=f"role_{proj['id']}_{role}", use_container_width=True):
+                                st.session_state.show_project_list = f"role_{proj['id']}_{role}"
+                                st.session_state.project_list_data = proj_data
+                                st.session_state.selected_role = role
+                                # Clear user list state to avoid conflicts
+                                st.session_state.show_user_list = None
+                                st.session_state.user_list_data = []
+                                st.rerun()
+                        
+                        # Show remaining roles in expander if there are more than 4
+                        if len(roles_list) > max_visible_roles:
+                            remaining_count = len(roles_list) - max_visible_roles
+                            with st.expander(f"➕ {remaining_count} more role(s)"):
+                                for role, count in roles_list[max_visible_roles:]:
+                                    if st.button(f"{role}: {count}", key=f"role_{proj['id']}_{role}_exp", use_container_width=True):
+                                        st.session_state.show_project_list = f"role_{proj['id']}_{role}"
+                                        st.session_state.project_list_data = proj_data
+                                        st.session_state.selected_role = role
+                                        # Clear user list state to avoid conflicts
+                                        st.session_state.show_user_list = None
+                                        st.session_state.user_list_data = []
+                                        st.rerun()
+                        
+                        # Add spacing to standardize height
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        
+                        # Total users
+                        if st.button(f"**Total Users**\n{proj_data['total_users']}", key=f"users_{proj['id']}", use_container_width=True):
+                            st.session_state.show_project_list = f"users_{proj['id']}"
+                            st.session_state.project_list_data = proj_data
+                            # Clear user list state to avoid conflicts
+                            st.session_state.show_user_list = None
+                            st.session_state.user_list_data = []
+                            st.rerun()
+    
+    # Initialize project list state (already initialized at top level)
+    if "show_project_list" not in st.session_state:
+        st.session_state.show_project_list = None
+    if "project_list_data" not in st.session_state:
+        st.session_state.project_list_data = None
+    
+    # Single dialog function to handle all project list types
+    # Only show dialog if explicitly triggered (not on page load)
+    if st.session_state.show_project_list and st.session_state.project_list_data:
+        # Only show project list dialog if user list is not active
+        if not st.session_state.show_user_list:
+            @st.dialog("📋 Project Details")
+            def show_project_list_dialog():
+                if not st.session_state.show_project_list or not st.session_state.project_list_data:
+                    st.info("No data to display.")
+                    return
+                
+                proj_data = st.session_state.project_list_data
+                proj = proj_data["project"]
+                
+                if st.session_state.show_project_list.startswith("tasks_"):
+                    st.markdown(f"### 📋 Tasks Details - {proj.get('name')}")
+                    task_list = []
+                    
+                    # Build name mapping from allocation_data first (most reliable - has names directly)
+                    user_map = {}
+                    if proj_data.get("allocation_data") and proj_data["allocation_data"].get("resources"):
+                        for resource in proj_data["allocation_data"]["resources"]:
+                            res_user_id = str(resource.get("user_id", "")).strip()
+                            res_name = resource.get("name", "").strip()
+                            if res_user_id and res_user_id != "None" and res_name and res_name != "None":
+                                # Store with multiple ID format variants for better matching
+                                user_map[res_user_id] = res_name
+                                user_map[res_user_id.lower()] = res_name
+                                user_map[res_user_id.upper()] = res_name
+                                # Also store without dashes in case of UUID format differences
+                                user_map[res_user_id.replace("-", "")] = res_name
+                                user_map[res_user_id.replace("-", "").lower()] = res_name
+                        print(f"[DEBUG] Tasks dialog: Created mapping from allocation_data with {len(set(user_map.values()))} unique users, {len(user_map)} ID variants")
+                    
+                    # Fallback to API mapping if allocation_data didn't have names
+                    if not user_map:
+                        user_map = get_user_name_mapping()
+                        if not user_map:
+                            user_map = st.session_state.get("user_name_mapping_fallback", {})
+                        print(f"[DEBUG] Tasks dialog: Using API/fallback mapping with {len(user_map)} users")
+                    
+                    # Debug: Show sample user IDs from metrics
+                    if proj_data["metrics"]:
+                        sample_metric_user_ids = [str(m.get("user_id")) for m in proj_data["metrics"][:3]]
+                        print(f"[DEBUG] Tasks dialog: Sample metric user_ids: {sample_metric_user_ids}")
+                        print(f"[DEBUG] Tasks dialog: Can find names? {[user_map.get(uid, 'NOT_FOUND') for uid in sample_metric_user_ids]}")
+                    
+                    for m in proj_data["metrics"]:
+                        user_id = str(m.get("user_id") or m.get("id") or "").strip()
+                        if not user_id or user_id == "None":
+                            user_id = ""
+                        # Try to find name, with multiple ID format attempts
+                        user_name = user_map.get(user_id, "Unknown")
+                        if user_name == "Unknown":
+                            # Try lowercase, uppercase, and without dashes
+                            user_id_lower = user_id.lower()
+                            user_id_upper = user_id.upper()
+                            user_id_no_dashes = user_id.replace("-", "")
+                            user_name = (user_map.get(user_id_lower) or 
+                                        user_map.get(user_id_upper) or 
+                                        user_map.get(user_id_no_dashes) or
+                                        user_map.get(user_id_no_dashes.lower()) or
+                                        "Unknown")
+                        # If still unknown, try to get from allocation_data directly with exact match
+                        if user_name == "Unknown" and proj_data.get("allocation_data") and user_id:
+                            for resource in proj_data["allocation_data"].get("resources", []):
+                                res_id = str(resource.get("user_id", "")).strip()
+                                # Try exact match and normalized matches
+                                if (res_id == user_id or 
+                                    res_id.lower() == user_id.lower() or
+                                    res_id.replace("-", "") == user_id.replace("-", "")):
+                                    user_name = resource.get("name", "Unknown")
+                                    if user_name and user_name != "None":
+                                        break
+                        task_list.append({
+                            "user_name": user_name,
+                            "tasks_completed": m.get("tasks_completed", 0),
+                            "hours_worked": m.get("hours_worked", 0),
+                            "work_role": m.get("work_role", "Unknown"),
+                            "user_id": user_id
+                        })
+                    if task_list:
+                        df_tasks = pd.DataFrame(task_list)
+                        df_tasks = df_tasks[["user_name", "tasks_completed", "hours_worked", "work_role", "user_id"]]
+                        st.dataframe(df_tasks, use_container_width=True, height=400)
+                        export_csv(f"{proj.get('name')}_tasks_{selected_date}.csv", task_list)
+                    else:
+                        st.info("No task data available.")
+                
+                elif st.session_state.show_project_list.startswith("hours_"):
+                    st.markdown(f"### 📋 Hours Details - {proj.get('name')}")
+                    hours_list = []
+                    
+                    # Build name mapping from allocation_data first (most reliable)
+                    user_map = {}
+                    if proj_data.get("allocation_data") and proj_data["allocation_data"].get("resources"):
+                        for resource in proj_data["allocation_data"]["resources"]:
+                            res_user_id = str(resource.get("user_id", "")).strip()
+                            res_name = resource.get("name", "").strip()
+                            if res_user_id and res_user_id != "None" and res_name and res_name != "None":
+                                # Store with multiple ID format variants for better matching
+                                user_map[res_user_id] = res_name
+                                user_map[res_user_id.lower()] = res_name
+                                user_map[res_user_id.upper()] = res_name
+                                user_map[res_user_id.replace("-", "")] = res_name
+                                user_map[res_user_id.replace("-", "").lower()] = res_name
+                        print(f"[DEBUG] Hours dialog: Created mapping from allocation_data with {len(set(user_map.values()))} unique users, {len(user_map)} ID variants")
+                    
+                    # Fallback to API mapping if allocation_data didn't have names
+                    if not user_map:
+                        user_map = get_user_name_mapping()
+                        if not user_map:
+                            user_map = st.session_state.get("user_name_mapping_fallback", {})
+                        print(f"[DEBUG] Hours dialog: Using API/fallback mapping with {len(user_map)} users")
+                    
+                    for m in proj_data["metrics"]:
+                        user_id = str(m.get("user_id") or m.get("id") or "").strip()
+                        if not user_id or user_id == "None":
+                            user_id = ""
+                        # Try to find name, with multiple ID format attempts
+                        user_name = user_map.get(user_id, "Unknown")
+                        if user_name == "Unknown":
+                            user_id_lower = user_id.lower()
+                            user_id_upper = user_id.upper()
+                            user_id_no_dashes = user_id.replace("-", "")
+                            user_name = (user_map.get(user_id_lower) or 
+                                        user_map.get(user_id_upper) or 
+                                        user_map.get(user_id_no_dashes) or
+                                        user_map.get(user_id_no_dashes.lower()) or
+                                        "Unknown")
+                        # If still unknown, try to get from allocation_data directly with exact match
+                        if user_name == "Unknown" and proj_data.get("allocation_data") and user_id:
+                            for resource in proj_data["allocation_data"].get("resources", []):
+                                res_id = str(resource.get("user_id", "")).strip()
+                                if (res_id == user_id or 
+                                    res_id.lower() == user_id.lower() or
+                                    res_id.replace("-", "") == user_id.replace("-", "")):
+                                    user_name = resource.get("name", "Unknown")
+                                    if user_name and user_name != "None":
+                                        break
+                        hours_list.append({
+                            "user_name": user_name,
+                            "hours_worked": m.get("hours_worked", 0),
+                            "tasks_completed": m.get("tasks_completed", 0),
+                            "work_role": m.get("work_role", "Unknown"),
+                            "user_id": user_id
+                        })
+                    if hours_list:
+                        df_hours = pd.DataFrame(hours_list)
+                        df_hours = df_hours[["user_name", "hours_worked", "tasks_completed", "work_role", "user_id"]]
+                        st.dataframe(df_hours, use_container_width=True, height=400)
+                        export_csv(f"{proj.get('name')}_hours_{selected_date}.csv", hours_list)
+                    else:
+                        st.info("No hours data available.")
+                
+                elif st.session_state.show_project_list.startswith("role_"):
+                    selected_role = st.session_state.get("selected_role", "Unknown")
+                    st.markdown(f"### 📋 Role Details - {proj.get('name')} - {selected_role}")
+                    role_list = []
+                    
+                    # Build name mapping from allocation_data first (most reliable)
+                    user_map = {}
+                    if proj_data.get("allocation_data") and proj_data["allocation_data"].get("resources"):
+                        for resource in proj_data["allocation_data"]["resources"]:
+                            res_user_id = str(resource.get("user_id", "")).strip()
+                            res_name = resource.get("name", "").strip()
+                            if res_user_id and res_user_id != "None" and res_name and res_name != "None":
+                                # Store with multiple ID format variants for better matching
+                                user_map[res_user_id] = res_name
+                                user_map[res_user_id.lower()] = res_name
+                                user_map[res_user_id.upper()] = res_name
+                                user_map[res_user_id.replace("-", "")] = res_name
+                                user_map[res_user_id.replace("-", "").lower()] = res_name
+                        print(f"[DEBUG] Role dialog: Created mapping from allocation_data with {len(set(user_map.values()))} unique users, {len(user_map)} ID variants")
+                    
+                    # Fallback to API mapping if allocation_data didn't have names
+                    if not user_map:
+                        user_map = get_user_name_mapping()
+                        if not user_map:
+                            user_map = st.session_state.get("user_name_mapping_fallback", {})
+                        print(f"[DEBUG] Role dialog: Using API/fallback mapping with {len(user_map)} users")
+                    
+                    for m in proj_data["metrics"]:
+                        if m.get("work_role") == selected_role:
+                            user_id = str(m.get("user_id") or m.get("id") or "").strip()
+                            if not user_id or user_id == "None":
+                                user_id = ""
+                            # Try to find name, with multiple ID format attempts
+                            user_name = user_map.get(user_id, "Unknown")
+                            if user_name == "Unknown":
+                                user_id_lower = user_id.lower()
+                                user_id_upper = user_id.upper()
+                                user_id_no_dashes = user_id.replace("-", "")
+                                user_name = (user_map.get(user_id_lower) or 
+                                            user_map.get(user_id_upper) or 
+                                            user_map.get(user_id_no_dashes) or
+                                            user_map.get(user_id_no_dashes.lower()) or
+                                            "Unknown")
+                            # If still unknown, try to get from allocation_data directly with exact match
+                            if user_name == "Unknown" and proj_data.get("allocation_data") and user_id:
+                                for resource in proj_data["allocation_data"].get("resources", []):
+                                    res_id = str(resource.get("user_id", "")).strip()
+                                    if (res_id == user_id or 
+                                        res_id.lower() == user_id.lower() or
+                                        res_id.replace("-", "") == user_id.replace("-", "")):
+                                        user_name = resource.get("name", "Unknown")
+                                        if user_name and user_name != "None":
+                                            break
+                            role_list.append({
+                                "user_name": user_name,
+                                "user_id": user_id,
+                                "work_role": m.get("work_role", "Unknown"),
+                                "hours_worked": m.get("hours_worked", 0),
+                                "tasks_completed": m.get("tasks_completed", 0)
+                            })
+                    if role_list:
+                        df_role = pd.DataFrame(role_list)
+                        df_role = df_role[["user_name", "work_role", "hours_worked", "tasks_completed", "user_id"]]
+                        st.dataframe(df_role, use_container_width=True, height=400)
+                        export_csv(f"{proj.get('name')}_{selected_role}_users_{selected_date}.csv", role_list)
+                    else:
+                        st.info(f"No users found for role: {selected_role}")
+                
+                elif st.session_state.show_project_list.startswith("users_"):
+                    st.markdown(f"### 📋 Users in Project - {proj.get('name')}")
+                    if proj_data.get("allocation_data") and proj_data["allocation_data"].get("resources"):
+                        resources = aggregate_by_user(proj_data["allocation_data"]["resources"])
+                        user_list = []
+                        for r in resources:
+                            user_metrics = [m for m in proj_data["metrics"] if m.get("user_id") == r.get("user_id")]
+                            total_user_hours = sum(float(m.get("hours_worked", 0) or 0) for m in user_metrics)
+                            total_user_tasks = sum(int(m.get("tasks_completed", 0) or 0) for m in user_metrics)
+                            
+                            user_list.append({
+                                "name": r.get("name", "-"),
+                                "email": r.get("email", "-"),
+                                "work_role": r.get("work_role", "-"),
+                                "attendance_status": r.get("attendance_status", "-"),
+                                "total_hours_clocked": f"{total_user_hours:.2f}",
+                                "total_tasks_performed": total_user_tasks
+                            })
+                        if user_list:
+                            df_users = pd.DataFrame(user_list)
+                            st.dataframe(df_users, use_container_width=True, height=400)
+                            export_csv(f"{proj.get('name')}_users_{selected_date}.csv", user_list)
+                        else:
+                            st.info("No users found in this project.")
+                    else:
+                        st.info("No allocation data available for this project.")
+                
+                col1, col2 = st.columns([4, 1])
+                with col2:
+                    if st.button("Close", key="close_project_modal", use_container_width=True, type="primary"):
+                        st.session_state.show_project_list = None
+                        st.session_state.project_list_data = None
+                        if "selected_role" in st.session_state:
+                            st.session_state.selected_role = None
+                        st.rerun()
+            
+            show_project_list_dialog()
+
+# ==========================================
+# TAB 2: VISUALIZATIONS
+# ==========================================
+with tab2:
+    st.markdown("## 📈 Visualizations")
+    
+    # Fetch metrics for all projects (using cached functions)
+    all_projects = get_all_projects_cached()
+    project_ids = [p["id"] for p in all_projects]
+    project_map = {p["id"]: p["name"] for p in all_projects}
+    
+    # Fetch metrics sequentially (using cached functions)
+    date_str = selected_date.isoformat()
+    metrics_data = []
+    
+    for project_id in project_ids:
+        metrics = get_project_metrics_cached(project_id, date_str, date_str)
+        if metrics:
+            metrics_data.extend(metrics)
+    
+    # Prepare data for charts
+    if metrics_data:
+        df_metrics = pd.DataFrame(metrics_data)
+        df_metrics["date"] = pd.to_datetime(df_metrics.get("metric_date", selected_date))
+        df_metrics["project_name"] = df_metrics["project_id"].astype(str).map(project_map)
+        
+        # Chart 1: Hours Worked by Project
+        chart_col1, chart_col2 = st.columns(2)
+        
+        with chart_col1:
+            st.markdown("#### Total Hours Worked by Project")
+            hours_by_project = df_metrics.groupby("project_name")["hours_worked"].sum().reset_index()
+            fig1 = px.bar(
+                hours_by_project,
+                x="project_name",
+                y="hours_worked",
+                labels={"project_name": "Project", "hours_worked": "Hours Worked"}
+            )
+            fig1.update_layout(height=400, xaxis_tickangle=-45)
+            st.plotly_chart(fig1, use_container_width=True)
+        
+        with chart_col2:
+            st.markdown("#### Total Tasks Completed by Project")
+            tasks_by_project = df_metrics.groupby("project_name")["tasks_completed"].sum().reset_index()
+            fig2 = px.bar(
+                tasks_by_project,
+                x="project_name",
+                y="tasks_completed",
+                labels={"project_name": "Project", "tasks_completed": "Tasks Completed"}
+            )
+            fig2.update_layout(height=400, xaxis_tickangle=-45)
+            st.plotly_chart(fig2, use_container_width=True)
+        
+        # Chart 3: Role Distribution
+        chart_col3, chart_col4 = st.columns(2)
+        
+        with chart_col3:
+            st.markdown("#### Hours Worked by Role")
+            hours_by_role = df_metrics.groupby("work_role")["hours_worked"].sum().reset_index()
+            fig3 = px.pie(
+                hours_by_role,
+                values="hours_worked",
+                names="work_role",
+                title="Hours Distribution by Role"
+            )
+            fig3.update_layout(height=400)
+            st.plotly_chart(fig3, use_container_width=True)
+        
+        with chart_col4:
+            st.markdown("#### Tasks Completed by Role")
+            tasks_by_role = df_metrics.groupby("work_role")["tasks_completed"].sum().reset_index()
+            fig4 = px.pie(
+                tasks_by_role,
+                values="tasks_completed",
+                names="work_role",
+                title="Tasks Distribution by Role"
+            )
+            fig4.update_layout(height=400)
+            st.plotly_chart(fig4, use_container_width=True)
+        
+        # Chart 5: Project vs Role Heatmap
+        st.markdown("#### Hours Worked: Project vs Role Heatmap")
+        heatmap_data = df_metrics.groupby(["project_name", "work_role"])["hours_worked"].sum().reset_index()
+        heatmap_pivot = heatmap_data.pivot(index="project_name", columns="work_role", values="hours_worked").fillna(0)
+        
+        fig5 = go.Figure(data=go.Heatmap(
+            z=heatmap_pivot.values,
+            x=heatmap_pivot.columns,
+            y=heatmap_pivot.index,
+            colorscale='Blues',
+            text=heatmap_pivot.values,
+            texttemplate='%{text:.1f}',
+            textfont={"size": 10},
+            colorbar=dict(title="Hours")
+        ))
+        fig5.update_layout(height=400, xaxis_title="Role", yaxis_title="Project")
+        st.plotly_chart(fig5, use_container_width=True)
+    else:
+        st.info("No metrics data available for visualization.")
+
+# ==========================================
+# TAB 3: DETAILED PROJECT VIEW
+# ==========================================
+with tab3:
+    st.markdown("## 🔍 Detailed Project View")
+    
+    # Initialize session state for allocation popup (already initialized at top level)
+    if "show_allocation_popup" not in st.session_state:
+        st.session_state.show_allocation_popup = False
+    if "allocation_popup_data" not in st.session_state:
+        st.session_state.allocation_popup_data = None
+    
+    # Show popup only when explicitly triggered (not on page load)
+    # Only show allocation dialog if no other dialogs are active
+    if (st.session_state.get("show_allocation_popup") and 
+        st.session_state.get("allocation_popup_data") and
+        not st.session_state.get("show_user_list") and
+        not st.session_state.get("show_project_list")):
+        popup_data = st.session_state.allocation_popup_data
+        filtered_popup = popup_data["filtered"]
+        project_id_popup = popup_data["project_id"]
+        project_name_popup = popup_data["project_name"]
+        detail_date_popup = popup_data["date"]
+        
+        @st.dialog(f"📋 Allocation List - {project_name_popup}")
+        def show_allocation_dialog():
+            # Get metrics for tasks calculation
+            project_metrics = get_project_metrics_cached(project_id_popup, detail_date_popup.isoformat(), detail_date_popup.isoformat())
+            # Create a mapping of user_id to total tasks
+            user_tasks_map = {}
+            for m in project_metrics:
+                user_id = str(m.get("user_id"))
+                if user_id not in user_tasks_map:
+                    user_tasks_map[user_id] = 0
+                user_tasks_map[user_id] += int(m.get("tasks_completed", 0) or 0)
+            
+            # Prepare data for table
+            allocation_table_data = []
+            for r in filtered_popup:
+                user_id = str(r.get("user_id"))
+                tasks_completed = user_tasks_map.get(user_id, 0)
+                hours_worked = calculate_hours_worked(
+                    r.get("first_clock_in"),
+                    r.get("last_clock_out"),
+                    r.get("minutes_worked"),
+                )
+                allocation_table_data.append({
+                    "Name": r.get("name", "-"),
+                    "Email": r.get("email", "-"),
+                    "Designation": r.get("designation", "-"),
+                    "Work Role": r.get("work_role", "-"),
+                    "Reporting Manager": r.get("reporting_manager") or "-",
+                    "Status": r.get("attendance_status", "-"),
+                    "Tasks Completed": tasks_completed,
+                    "Clock In": format_time(r.get("first_clock_in")),
+                    "Clock Out": format_time(r.get("last_clock_out")),
+                    "Hours Worked": hours_worked
+                })
+            
+            if allocation_table_data:
+                df_allocation = pd.DataFrame(allocation_table_data)
+                st.dataframe(df_allocation, use_container_width=True, height=400)
+                export_csv(
+                    f"project_allocation_{project_name_popup}_{detail_date_popup}.csv",
+                    allocation_table_data
+                )
+            else:
+                st.info("No allocation data available.")
+            
+            col1, col2 = st.columns([4, 1])
+            with col2:
+                if st.button("Close", key="close_allocation_popup", use_container_width=True, type="primary"):
+                    st.session_state.show_allocation_popup = False
+                    st.session_state.allocation_popup_data = None
+                    st.rerun()
+        
+        show_allocation_dialog()
+    
+    st.markdown("---")
+    
+    # Fetch projects (cached)
+    all_projects = get_all_projects_cached()
+    
+    # Filters
+    f1, f2, f3, f4, f5 = st.columns(5)
+    
+    with f1:
+        selected_project = st.selectbox("Project", ["All"] + [p["name"] for p in all_projects], key="detail_project")
+    
+    with f2:
+        detail_date = st.date_input("Date", value=selected_date, max_value=date.today(), key="detail_date")
+    
+    with f3:
+        designation_filter = st.selectbox("Designation", ["ALL", "ADMIN", "USER"], key="detail_designation")
+    
+    with f4:
+        status_filter = st.selectbox(
+            "Status", ["ALL", "PRESENT", "ABSENT", "LEAVE", "UNKNOWN"], key="detail_status"
+        )
+    
+    with f5:
+        work_role_filter = st.selectbox(
+            "Work Role",
+            ["ALL"] + WORK_ROLE_OPTIONS,
+            key="detail_work_role"
+        )
+    
+    if selected_project and selected_project != "All":
+        # Find project ID from project name
+        project_id = None
+        for p in all_projects:
+            if p.get("name") == selected_project:
+                project_id = p.get("id")
+                break
+        
+        if project_id:
+            # Fetch resource data (cached)
+            data = get_project_allocation_cached(project_id, detail_date.isoformat())
+            
+            if data and data.get("resources"):
+                resources = aggregate_by_user(data["resources"])
+                
+                # Apply filters
+                filtered = resources
+                if designation_filter != "ALL":
+                    filtered = [r for r in filtered if r.get("designation") == designation_filter]
+                if work_role_filter != "ALL":
+                    filtered = [r for r in filtered if r.get("work_role") == work_role_filter]
+                if status_filter != "ALL":
+                    filtered = [r for r in filtered if r.get("attendance_status") == status_filter]
+                
+                # Summary
+                st.subheader("📌 Summary")
+                allocated = len(filtered)
+                present = sum(r["attendance_status"] == "PRESENT" for r in filtered)
+                absent = sum(r["attendance_status"] == "ABSENT" for r in filtered)
+                leave = sum(r["attendance_status"] == "LEAVE" for r in filtered)
+                unknown = sum(r["attendance_status"] == "UNKNOWN" for r in filtered)
+                
+                # Verify breakdown
+                status_total = present + absent + leave + unknown
+                
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric("Allocated", allocated)
+                c2.metric("Present", present)
+                c3.metric("Absent", absent)
+                c4.metric("Leave", leave)
+                c5.metric("Unknown", unknown)
+                
+                # Show breakdown to verify calculation
+                if status_total != allocated:
+                    st.caption(f"ℹ️ **Breakdown:** Present ({present}) + Absent ({absent}) + Leave ({leave}) + Unknown ({unknown}) = {status_total} | Allocated: {allocated}")
+                else:
+                    st.caption(f"ℹ️ **Breakdown:** Present ({present}) + Absent ({absent}) + Leave ({leave}) + Unknown ({unknown}) = {status_total}")
+                
+                # Allocation List - Show as popup
+                st.subheader("👥 Allocation List")
+                if not filtered:
+                    st.info("No users match the selected filters.")
+                else:
+                    # Button to show allocation list
+                    if st.button(f"📋 View Allocation List ({len(filtered)} users)", key="btn_view_allocation", use_container_width=True, type="primary"):
+                        st.session_state.show_allocation_popup = True
+                        st.session_state.allocation_popup_data = {
+                            "filtered": filtered,
+                            "project_id": project_id,
+                            "project_name": selected_project,
+                            "date": detail_date
+                        }
+                        st.rerun()
+            else:
+                st.info("No allocation data found for this project.")
+        else:
+            st.warning("Project not found.")
+    else:
+        st.info("Please select a project to view detailed allocation information.")
