@@ -35,18 +35,39 @@ def authenticated_request(method: str, endpoint: str, params: Optional[Dict] = N
     
     headers = {"Authorization": f"Bearer {token}"}
     try:
+        full_url = f"{API_BASE_URL}{endpoint}"
+        # Debug logging
+        if st.session_state.get("debug_mode", False):
+            st.write(f"🔍 Making {method} request to: {full_url}")
+            if params:
+                st.write(f"🔍 Params: {params}")
+        
         response = requests.request(
             method=method,
-            url=f"{API_BASE_URL}{endpoint}",
+            url=full_url,
             headers=headers,
-            params=params
+            params=params,
+            timeout=30
         )
         if response.status_code >= 400:
-            st.error(f"API Error: {response.status_code} - {response.text}")
+            error_text = response.text
+            st.error(f"API Error: {response.status_code} - {error_text}")
+            # Print to console for debugging
+            print(f"API Error {response.status_code} for {method} {full_url}: {error_text}")
             return None
         return response.json()
+    except requests.exceptions.Timeout:
+        st.error(f"Request timeout: Server took too long to respond for {endpoint}")
+        print(f"Request timeout for {method} {endpoint}")
+        return None
+    except requests.exceptions.ConnectionError:
+        st.error(f"Connection error: Could not reach server at {API_BASE_URL}")
+        print(f"Connection error for {method} {endpoint}")
+        return None
     except Exception as e:
-        st.error(f"Request failed: {str(e)}")
+        error_msg = f"Request failed: {str(e)}"
+        st.error(error_msg)
+        print(f"Request exception for {method} {endpoint}: {error_msg}")
         return None
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
@@ -79,7 +100,7 @@ def fetch_user_productivity_data(start_date: Optional[date] = None, end_date: Op
                                   fetch_all: bool = True) -> pd.DataFrame:
     """
     Fetch real user productivity data from API and combine with user/project names,
-    attendance, and quality ratings.
+    attendance.
     """
     # Get name mappings
     user_map = get_user_name_mapping()
@@ -172,7 +193,7 @@ def fetch_user_productivity_data(start_date: Optional[date] = None, end_date: Op
     
     df_metrics["attendance_status"] = df_metrics["attendance_status"].apply(normalize_status)
     
-    # Fetch quality ratings from the new API endpoint
+    # Fetch quality ratings from API
     quality_params = {}
     if user_id:
         quality_params["user_id"] = user_id
@@ -185,13 +206,15 @@ def fetch_user_productivity_data(start_date: Optional[date] = None, end_date: Op
     
     quality_data = authenticated_request("GET", "/admin/metrics/user_daily/quality-ratings", params=quality_params)
     
-    # Create quality mapping: (user_id, project_id, date) -> rating
+    # Create quality mapping: (user_id, project_id, date) -> quality info
     quality_map = {}
+    quality_score_map = {}
+    quality_source_map = {}
     if quality_data:
         for q in quality_data:
             key = (str(q["user_id"]), str(q["project_id"]), pd.to_datetime(q["metric_date"]).date())
-            # Normalize rating: "GOOD" -> "Good", "AVERAGE" -> "Average", "BAD" -> "Bad"
-            rating = q["quality_rating"]
+            # Normalize rating: "GOOD" -> "Good", "AVERAGE" -> "Average", "BAD" -> "Bad", None -> "Not Assessed"
+            rating = q.get("quality_rating")
             if rating == "GOOD":
                 quality_map[key] = "Good"
             elif rating == "AVERAGE":
@@ -199,27 +222,49 @@ def fetch_user_productivity_data(start_date: Optional[date] = None, end_date: Op
             elif rating == "BAD":
                 quality_map[key] = "Bad"
             else:
-                quality_map[key] = "Average"
+                quality_map[key] = "Not Assessed"
+            
+            # Store quality score and source
+            quality_score_map[key] = q.get("quality_score")
+            quality_source_map[key] = q.get("source", "MANUAL")
     
     # Map quality ratings to metrics
     df_metrics["quality_rating"] = df_metrics.apply(
         lambda row: quality_map.get(
             (str(row["user_id"]), str(row["project_id"]), row["date_obj"]),
-            "Average"  # Default if not found
+            "Not Assessed"  # Default if not found - quality must be manually assessed
+        ), axis=1
+    )
+    
+    # Map quality scores
+    df_metrics["quality_score"] = df_metrics.apply(
+        lambda row: quality_score_map.get(
+            (str(row["user_id"]), str(row["project_id"]), row["date_obj"]),
+            None
+        ), axis=1
+    )
+    
+    # Map quality source
+    df_metrics["quality_source"] = df_metrics.apply(
+        lambda row: quality_source_map.get(
+            (str(row["user_id"]), str(row["project_id"]), row["date_obj"]),
+            None
         ), axis=1
     )
     
     # Select and reorder columns to match expected format
     result_df = df_metrics[[
         "date", "user", "project", "role", "hours_worked", 
-        "tasks_completed", "quality_rating", "productivity_score", "attendance_status"
+        "tasks_completed", "quality_rating", "quality_score", "quality_source",
+        "productivity_score", "attendance_status"
     ]].copy()
     
     # Fill missing values
     result_df["hours_worked"] = result_df["hours_worked"].fillna(0)
     result_df["tasks_completed"] = result_df["tasks_completed"].fillna(0)
     result_df["productivity_score"] = result_df["productivity_score"].fillna(0)
-    result_df["quality_rating"] = result_df["quality_rating"].fillna("Average")
+    result_df["quality_rating"] = result_df["quality_rating"].fillna("Not Assessed")
+    # quality_score can remain None for unassessed days
     
     return result_df
 
@@ -235,7 +280,6 @@ def generate_mock_user_data():
     - role (TEXT): User role (Manager, Developer, Designer, etc.)
     - hours_worked (NUMERIC): Total hours worked
     - tasks_completed (INTEGER): Number of tasks completed
-    - quality_rating (TEXT): Quality rating (Good/Average/Bad)
     - productivity_score (NUMERIC): Productivity score (0-100)
     - attendance_status (TEXT): Present/WFH/Leave/Absent
     
@@ -262,7 +306,6 @@ def generate_mock_user_data():
                 "role": roles[idx],
                 "hours_worked": np.random.uniform(6, 10) if attendance in ["Present", "WFH"] else 0,
                 "tasks_completed": np.random.randint(3, 12) if attendance in ["Present", "WFH"] else 0,
-                "quality_rating": np.random.choice(["Good", "Average", "Bad"], p=[0.5, 0.35, 0.15]),
                 "productivity_score": np.random.uniform(60, 95) if attendance in ["Present", "WFH"] else 0,
                 "attendance_status": attendance
             })
@@ -323,6 +366,11 @@ with col2:
         # Get soul_id mapping for search
         soul_id_map = get_user_soul_id_mapping()
         user_map = get_user_name_mapping()
+        
+        if not user_map:
+            st.error("⚠️ Unable to load users. Please check your connection and try again.")
+            st.stop()
+        
         # Create reverse mapping: soul_id -> user_id
         soul_to_user_id = {v: k for k, v in soul_id_map.items() if v}
         # Create user options with soul_id display
@@ -334,13 +382,22 @@ with col2:
             else:
                 user_options.append(user_name)
         
+        if not user_options:
+            st.error("⚠️ No users available to select.")
+            st.stop()
+        
         selected_user_display = st.selectbox("Select User", sorted(user_options))
+        
         # Extract user name from selection
-        if "(Soul ID:" in selected_user_display:
-            selected_user = selected_user_display.split(" (Soul ID:")[0]
+        if selected_user_display:
+            if "(Soul ID:" in selected_user_display:
+                selected_user = selected_user_display.split(" (Soul ID:")[0]
+            else:
+                selected_user = selected_user_display
+            df_filtered = df[df["user"] == selected_user].copy()
         else:
-            selected_user = selected_user_display
-        df_filtered = df[df["user"] == selected_user].copy()
+            selected_user = None
+            df_filtered = pd.DataFrame()
     else:
         selected_user = None
         df_filtered = df.copy()
@@ -360,7 +417,7 @@ with col3:
         soul_id_search = None
 
 # =====================================================================
-# FILTERS (Date Range, Role, Project, Quality)
+# FILTERS (Date Range, Role, Project)
 # =====================================================================
 st.markdown("### 🔍 Filters")
 filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
@@ -374,10 +431,10 @@ if "user_filter_roles" not in st.session_state:
     st.session_state.user_filter_roles = []
 if "user_filter_projects" not in st.session_state:
     st.session_state.user_filter_projects = []
-if "user_filter_quality" not in st.session_state:
-    st.session_state.user_filter_quality = []
 if "user_filter_soul_id" not in st.session_state:
     st.session_state.user_filter_soul_id = ""
+if "user_filter_quality" not in st.session_state:
+    st.session_state.user_filter_quality = []
 
 with filter_col1:
     min_date = df["date"].min().date()
@@ -414,10 +471,11 @@ with filter_col3:
 with filter_col4:
     filter_quality = st.multiselect(
         "Filter by Quality",
-        options=["Good", "Average", "Bad"],
-        default=st.session_state.user_filter_quality if st.session_state.user_filter_quality else ["Good", "Average", "Bad"],
+        options=["Good", "Average", "Bad", "Not Assessed"],
+        default=st.session_state.user_filter_quality if st.session_state.user_filter_quality else ["Good", "Average", "Bad", "Not Assessed"],
         key="user_filter_quality_input"
     )
+
 
 # Apply Filters Button
 apply_col1, apply_col2 = st.columns([4, 1])
@@ -475,7 +533,7 @@ st.markdown("---")
 # MONTHLY SUMMARY - KPI CARDS
 # =====================================================================
 st.markdown("### 📈 Monthly Summary of Metrics")
-kpi_col1, kpi_col2, kpi_col3, kpi_col4, kpi_col5 = st.columns(5)
+kpi_col1, kpi_col2, kpi_col3, kpi_col4, kpi_col5, kpi_col6 = st.columns(6)
 
 with kpi_col1:
     total_hours = df_filtered["hours_worked"].sum()
@@ -490,16 +548,25 @@ with kpi_col3:
     st.metric("Avg Productivity Score", f"{avg_productivity:.1f}%")
 
 with kpi_col4:
-    good_quality_pct = (df_filtered["quality_rating"] == "Good").sum() / len(df_filtered) * 100 if len(df_filtered) > 0 else 0
-    st.metric("Good Quality %", f"{good_quality_pct:.1f}%")
+    # Calculate quality assessment coverage
+    assessed_count = len(df_filtered[df_filtered["quality_rating"] != "Not Assessed"])
+    total_count = len(df_filtered)
+    quality_coverage = (assessed_count / total_count * 100) if total_count > 0 else 0
+    st.metric("Quality Coverage", f"{quality_coverage:.1f}%")
 
 with kpi_col5:
     if view_mode == "All Users":
         unique_users = df_filtered["user"].nunique()
         st.metric("Active Users", f"{unique_users}")
     else:
-        avg_hours_per_day = df_filtered["hours_worked"].mean()
-        st.metric("Avg Hours/Day", f"{avg_hours_per_day:.1f} hrs")
+        # Show average quality score (only for assessed days with valid scores)
+        assessed_df = df_filtered[df_filtered["quality_rating"] != "Not Assessed"]
+        assessed_with_scores = assessed_df[assessed_df["quality_score"].notna()]
+        if len(assessed_with_scores) > 0:
+            avg_quality_score = assessed_with_scores["quality_score"].mean()
+            st.metric("Avg Quality Score", f"{avg_quality_score:.1f}")
+        else:
+            st.metric("Avg Quality Score", "N/A")
 
 st.markdown("---")
 
@@ -597,27 +664,8 @@ with chart_col3:
     )
     st.plotly_chart(fig3, use_container_width=True)
 
-with chart_col4:
-    st.markdown("#### Quality Distribution (Good/Avg/Bad)")
-    quality_counts = df_filtered["quality_rating"].value_counts().reset_index()
-    quality_counts.columns = ["quality_rating", "count"]
-    
-    fig4 = go.Figure(data=[go.Pie(
-        labels=quality_counts["quality_rating"],
-        values=quality_counts["count"],
-        hole=0.4,
-        marker=dict(colors=['#2ca02c', '#ff7f0e', '#d62728'])
-    )])
-    
-    fig4.update_layout(
-        height=400,
-        showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
-    )
-    st.plotly_chart(fig4, use_container_width=True)
-
 # =====================================================================
-# ROW 3: Attendance Status & Productivity vs Quality
+# ROW 3: Attendance Status & Quality Score Trend
 # =====================================================================
 chart_col5, chart_col6 = st.columns(2)
 
@@ -649,34 +697,45 @@ with chart_col5:
     st.plotly_chart(fig5, use_container_width=True)
 
 with chart_col6:
-    st.markdown("#### Productivity vs Quality")
-    # Use daily aggregated data
-    scatter_data = df_filtered.groupby(["user", "quality_rating", "role"]).agg({
-        "productivity_score": "mean",
-        "tasks_completed": "sum"
-    }).reset_index()
+    st.markdown("#### Quality Score Trend (Manually Assessed)")
+    # Filter to only assessed days and group by date
+    assessed_df = df_filtered[df_filtered["quality_rating"] != "Not Assessed"].copy()
     
-    fig6 = px.scatter(
-        scatter_data,
-        x="quality_rating",
-        y="productivity_score",
-        size="tasks_completed",
-        color="role" if view_mode == "All Users" else "user",
-        hover_data=["user", "tasks_completed"],
-        size_max=30
-    )
-    
-    fig6.update_layout(
-        height=400,
-        xaxis_title="Quality Rating",
-        yaxis_title="Avg Productivity Score"
-    )
-    st.plotly_chart(fig6, use_container_width=True)
+    if len(assessed_df) > 0:
+        # Filter to only days with valid quality scores
+        assessed_with_scores = assessed_df[assessed_df["quality_score"].notna()]
+        if len(assessed_with_scores) > 0:
+            quality_by_date = assessed_with_scores.groupby("date")["quality_score"].mean().reset_index()
+            quality_by_date = quality_by_date.sort_values("date")
+            
+            fig6 = go.Figure()
+            fig6.add_trace(go.Scatter(
+                x=quality_by_date["date"],
+                y=quality_by_date["quality_score"],
+                mode='lines+markers',
+                name='Quality Score',
+                line=dict(color='#9467bd', width=2),
+                marker=dict(size=6)
+            ))
+            
+            fig6.update_layout(
+                height=400,
+                hovermode='x unified',
+                xaxis_title="Date",
+                yaxis_title="Quality Score",
+                yaxis=dict(range=[0, 10]),
+                showlegend=False
+            )
+            st.plotly_chart(fig6, use_container_width=True)
+        else:
+            st.info("No quality scores available. Quality assessments exist but scores are missing.")
+    else:
+        st.info("No quality assessments available. Quality must be manually assessed.")
 
 # =====================================================================
-# ROW 4: Cumulative Tasks vs Hours & Task Completion vs Quality
+# ROW 4: Cumulative Tasks vs Hours
 # =====================================================================
-chart_col7, chart_col8 = st.columns(2)
+chart_col7 = st.columns(1)[0]
 
 with chart_col7:
     st.markdown("#### Cumulative Tasks vs Hours Worked")
@@ -715,34 +774,18 @@ with chart_col7:
     )
     st.plotly_chart(fig7, use_container_width=True)
 
-with chart_col8:
-    st.markdown("#### Task Completion vs Quality Rating")
-    
-    fig8 = px.box(
-        df_filtered,
-        x="quality_rating",
-        y="tasks_completed",
-        color="quality_rating",
-        points="outliers",
-        color_discrete_map={'Good': '#2ca02c', 'Average': '#ff7f0e', 'Bad': '#d62728'}
-    )
-    
-    fig8.update_layout(
-        height=400,
-        xaxis_title="Quality Rating",
-        yaxis_title="Tasks Completed",
-        showlegend=False
-    )
-    st.plotly_chart(fig8, use_container_width=True)
-
 # =====================================================================
 # DATA TABLE VIEW
 # =====================================================================
 with st.expander("📋 View Raw Data Table"):
     st.markdown("### Raw Data")
     display_df = df_filtered[["date", "user", "project", "role", "hours_worked", 
-                               "tasks_completed", "quality_rating", "productivity_score", 
-                               "attendance_status"]].sort_values("date", ascending=False)
+                               "tasks_completed", "quality_rating", "quality_score", "quality_source",
+                               "productivity_score", "attendance_status"]].sort_values("date", ascending=False)
+    
+    # Format quality_score for display
+    if "quality_score" in display_df.columns:
+        display_df["quality_score"] = display_df["quality_score"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "N/A")
     
     st.dataframe(display_df, use_container_width=True, height=400)
     
@@ -754,6 +797,19 @@ with st.expander("📋 View Raw Data Table"):
         file_name="user_productivity_data.csv",
         mime="text/csv"
     )
+    
+    # Info about quality
+    st.info("💡 **Quality Note**: Quality ratings are manually assessed and separate from productivity. 'Not Assessed' means no quality evaluation has been done for that day.")
+    
+    # Quick quality assessment button
+    st.markdown("---")
+    st.markdown("### ⭐ Quick Quality Assessment")
+    st.markdown("Assess quality for selected rows or go to the Quality Assessment tab in Admin Projects for more options.")
+    
+    assess_col1, assess_col2 = st.columns([1, 4])
+    with assess_col1:
+        if st.button("📝 Assess Quality", use_container_width=True):
+            st.switch_page("pages/2_Admin_Projects.py")
 
 # =====================================================================
 # FOOTER

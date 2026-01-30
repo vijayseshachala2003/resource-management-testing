@@ -134,13 +134,15 @@ def fetch_project_productivity_data(start_date: Optional[date] = None, end_date:
     
     quality_data = authenticated_request("GET", "/admin/metrics/user_daily/quality-ratings", params=quality_params)
     
-    # Create quality mapping: (user_id, project_id, date) -> rating
+    # Create quality mapping: (user_id, project_id, date) -> quality info
     quality_map = {}
+    quality_score_map = {}
+    quality_source_map = {}
     if quality_data:
         for q in quality_data:
             key = (str(q["user_id"]), str(q["project_id"]), pd.to_datetime(q["metric_date"]).date())
-            # Normalize rating: "GOOD" -> "Good", "AVERAGE" -> "Average", "BAD" -> "Bad"
-            rating = q["quality_rating"]
+            # Normalize rating: "GOOD" -> "Good", "AVERAGE" -> "Average", "BAD" -> "Bad", None -> "Not Assessed"
+            rating = q.get("quality_rating")
             if rating == "GOOD":
                 quality_map[key] = "Good"
             elif rating == "AVERAGE":
@@ -148,27 +150,49 @@ def fetch_project_productivity_data(start_date: Optional[date] = None, end_date:
             elif rating == "BAD":
                 quality_map[key] = "Bad"
             else:
-                quality_map[key] = "Average"
+                quality_map[key] = "Not Assessed"
+            
+            # Store quality score and source
+            quality_score_map[key] = q.get("quality_score")
+            quality_source_map[key] = q.get("source", "MANUAL")
     
     # Map quality ratings to metrics
     df["quality_rating"] = df.apply(
         lambda row: quality_map.get(
             (str(row["user_id"]), str(row["project_id"]), row["date_obj"]),
-            "Average"  # Default if not found
+            "Not Assessed"  # Default if not found - quality must be manually assessed
+        ), axis=1
+    )
+    
+    # Map quality scores
+    df["quality_score"] = df.apply(
+        lambda row: quality_score_map.get(
+            (str(row["user_id"]), str(row["project_id"]), row["date_obj"]),
+            None
+        ), axis=1
+    )
+    
+    # Map quality source
+    df["quality_source"] = df.apply(
+        lambda row: quality_source_map.get(
+            (str(row["user_id"]), str(row["project_id"]), row["date_obj"]),
+            None
         ), axis=1
     )
     
     # Select and reorder columns
     result_df = df[[
         "date", "project", "user", "role", "hours_worked",
-        "tasks_completed", "quality_rating", "productivity_score", "active_users"
+        "tasks_completed", "quality_rating", "quality_score", "quality_source",
+        "productivity_score", "active_users"
     ]].copy()
     
     # Fill missing values
     result_df["hours_worked"] = result_df["hours_worked"].fillna(0)
     result_df["tasks_completed"] = result_df["tasks_completed"].fillna(0)
     result_df["productivity_score"] = result_df["productivity_score"].fillna(0)
-    result_df["quality_rating"] = result_df["quality_rating"].fillna("Average")
+    result_df["quality_rating"] = result_df["quality_rating"].fillna("Not Assessed")
+    # quality_score can remain None for unassessed days
     
     return result_df
 
@@ -184,7 +208,6 @@ def generate_mock_project_data():
     - role (TEXT): User role
     - hours_worked (NUMERIC): Total hours worked
     - tasks_completed (INTEGER): Number of tasks completed
-    - quality_rating (TEXT): Quality rating (Good/Average/Bad)
     - productivity_score (NUMERIC): Productivity score (0-100)
     - active_users (INTEGER): Number of active users
     
@@ -214,7 +237,6 @@ def generate_mock_project_data():
                     "role": roles[user_idx],
                     "hours_worked": np.random.uniform(4, 10),
                     "tasks_completed": np.random.randint(2, 10),
-                    "quality_rating": np.random.choice(["Good", "Average", "Bad"], p=[0.5, 0.35, 0.15]),
                     "productivity_score": np.random.uniform(65, 90),
                     "active_users": num_users
                 })
@@ -275,7 +297,7 @@ with col2:
         df_filtered = df.copy()
 
 # =====================================================================
-# FILTERS (Date Range, Role, Project, Quality)
+# FILTERS (Date Range, Role, Project)
 # =====================================================================
 st.markdown("### 🔍 Filters")
 
@@ -288,10 +310,8 @@ if "project_filter_roles" not in st.session_state:
     st.session_state.project_filter_roles = []
 if "project_filter_projects" not in st.session_state:
     st.session_state.project_filter_projects = []
-if "project_filter_quality" not in st.session_state:
-    st.session_state.project_filter_quality = []
 
-filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+filter_col1, filter_col2, filter_col3 = st.columns(3)
 
 with filter_col1:
     min_date = df["date"].min().date()
@@ -325,13 +345,6 @@ with filter_col3:
     else:
         filter_projects = []
 
-with filter_col4:
-    filter_quality = st.multiselect(
-        "Filter by Quality",
-        options=["Good", "Average", "Bad"],
-        default=st.session_state.project_filter_quality if st.session_state.project_filter_quality else ["Good", "Average", "Bad"],
-        key="project_filter_quality_input"
-    )
 
 # Apply Filters Button
 apply_col1, apply_col2 = st.columns([4, 1])
@@ -343,7 +356,6 @@ if apply_filters:
     st.session_state.project_filter_date_range = date_range
     st.session_state.project_filter_roles = filter_roles
     st.session_state.project_filter_projects = filter_projects
-    st.session_state.project_filter_quality = filter_quality
     st.rerun()
 
 # Apply filters only if button was pressed
@@ -355,10 +367,6 @@ if st.session_state.project_filters_applied:
     # Apply project filter
     if view_mode == "All Projects" and st.session_state.project_filter_projects:
         df_filtered = df_filtered[df_filtered["project"].isin(st.session_state.project_filter_projects)]
-    
-    # Apply quality filter
-    if st.session_state.project_filter_quality:
-        df_filtered = df_filtered[df_filtered["quality_rating"].isin(st.session_state.project_filter_quality)]
     
     # Apply date filter
     if st.session_state.project_filter_date_range and len(st.session_state.project_filter_date_range) == 2:
@@ -373,7 +381,7 @@ st.markdown("---")
 # MONTHLY SUMMARY - KPI CARDS
 # =====================================================================
 st.markdown("### 📈 Monthly Summary of Metrics")
-kpi_col1, kpi_col2, kpi_col3, kpi_col4, kpi_col5 = st.columns(5)
+kpi_col1, kpi_col2, kpi_col3, kpi_col4, kpi_col5, kpi_col6 = st.columns(6)
 
 with kpi_col1:
     total_hours = df_filtered["hours_worked"].sum()
@@ -395,9 +403,6 @@ with kpi_col5:
     if view_mode == "All Projects":
         num_projects = df_filtered["project"].nunique()
         st.metric("Active Projects", f"{num_projects}")
-    else:
-        good_quality_pct = (df_filtered["quality_rating"] == "Good").sum() / len(df_filtered) * 100 if len(df_filtered) > 0 else 0
-        st.metric("Good Quality %", f"{good_quality_pct:.1f}%")
 
 st.markdown("---")
 
@@ -512,85 +517,11 @@ with chart_col4:
     )
     st.plotly_chart(fig4, use_container_width=True)
 
-# =====================================================================
-# ROW 3: Quality Breakdown & Daily Performance Stats
-# =====================================================================
-chart_col5, chart_col6 = st.columns(2)
-
-with chart_col5:
-    st.markdown("#### Quality Breakdown (Good/Avg/Bad)")
-    # Group by project and quality rating
-    quality_by_project = df_filtered.groupby(["project", "quality_rating"]).size().reset_index(name="count")
-    
-    fig5 = px.bar(
-        quality_by_project,
-        x="project",
-        y="count",
-        color="quality_rating",
-        barmode="stack",
-        color_discrete_map={'Good': '#2ca02c', 'Average': '#ff7f0e', 'Bad': '#d62728'}
-    )
-    
-    fig5.update_layout(
-        height=400,
-        xaxis_title="Project",
-        yaxis_title="Count",
-        showlegend=True
-    )
-    st.plotly_chart(fig5, use_container_width=True)
-
-with chart_col6:
-    st.markdown("#### Daily Performance Stats")
-    # Normalize metrics to 0-100 scale for comparison
-    daily_stats = df_filtered.groupby("date").agg({
-        "hours_worked": "sum",
-        "tasks_completed": "sum",
-        "productivity_score": "mean"
-    }).reset_index()
-    
-    # Normalize for visualization (scale to 0-100)
-    max_hours = daily_stats["hours_worked"].max()
-    max_tasks = daily_stats["tasks_completed"].max()
-    
-    daily_stats["hours_normalized"] = (daily_stats["hours_worked"] / max_hours * 100) if max_hours > 0 else 0
-    daily_stats["tasks_normalized"] = (daily_stats["tasks_completed"] / max_tasks * 100) if max_tasks > 0 else 0
-    
-    fig6 = go.Figure()
-    fig6.add_trace(go.Scatter(
-        x=daily_stats["date"],
-        y=daily_stats["hours_normalized"],
-        name="Hours (normalized)",
-        mode='lines+markers',
-        line=dict(color='#1f77b4')
-    ))
-    fig6.add_trace(go.Scatter(
-        x=daily_stats["date"],
-        y=daily_stats["tasks_normalized"],
-        name="Tasks (normalized)",
-        mode='lines+markers',
-        line=dict(color='#ff7f0e')
-    ))
-    fig6.add_trace(go.Scatter(
-        x=daily_stats["date"],
-        y=daily_stats["productivity_score"],
-        name="Productivity Score",
-        mode='lines+markers',
-        line=dict(color='#2ca02c')
-    ))
-    
-    fig6.update_layout(
-        height=400,
-        hovermode='x unified',
-        xaxis_title="Date",
-        yaxis_title="Normalized Value (0-100)",
-        showlegend=True
-    )
-    st.plotly_chart(fig6, use_container_width=True)
 
 # =====================================================================
 # ROW 4: Cumulative Tasks vs Hours & Role-Based Task Completion
 # =====================================================================
-chart_col7, chart_col8 = st.columns(2)
+chart_col7 = st.columns(1)[0]
 
 with chart_col7:
     st.markdown("#### Cumulative Tasks vs Hours Worked")
@@ -635,27 +566,6 @@ with chart_col7:
     )
     st.plotly_chart(fig7, use_container_width=True)
 
-with chart_col8:
-    st.markdown("#### Role-Based Task Completion")
-    # Group by role and project
-    role_task_completion = df_filtered.groupby(["role", "project"])["tasks_completed"].sum().reset_index()
-    
-    fig8 = px.bar(
-        role_task_completion,
-        x="role",
-        y="tasks_completed",
-        color="project",
-        barmode="group"
-    )
-    
-    fig8.update_layout(
-        height=400,
-        xaxis_title="Role",
-        yaxis_title="Tasks Completed",
-        showlegend=True
-    )
-    st.plotly_chart(fig8, use_container_width=True)
-
 # =====================================================================
 # VISUALIZATION: Monthly Summary Heatmap
 # =====================================================================
@@ -691,7 +601,7 @@ st.plotly_chart(fig9, use_container_width=True)
 with st.expander("📋 View Raw Data Table"):
     st.markdown("### Raw Data")
     display_df = df_filtered[["date", "project", "user", "role", "hours_worked", 
-                               "tasks_completed", "quality_rating", "productivity_score", 
+                               "tasks_completed", "productivity_score",
                                "active_users"]].sort_values("date", ascending=False)
     
     st.dataframe(display_df, use_container_width=True, height=400)
@@ -704,9 +614,10 @@ with st.expander("📋 View Raw Data Table"):
         file_name="project_productivity_data.csv",
         mime="text/csv"
     )
+    
 
 # =====================================================================
 # FOOTER
 # =====================================================================
 st.markdown("---")
-st.markdown("*Project Productivity & Quality Dashboard | Data powered by Supabase*")
+st.markdown("*Project Productivity Dashboard | Data powered by Supabase*")

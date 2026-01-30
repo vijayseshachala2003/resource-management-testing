@@ -1,5 +1,6 @@
 from datetime import date
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, aliased
@@ -34,6 +35,16 @@ def project_resource_allocation(
     - attendance_daily
     - shifts (via users.default_shift_id)
     """
+    
+    # Convert string project_id to UUID for proper filtering
+    try:
+        project_id_uuid = UUID(project_id)
+    except (ValueError, TypeError):
+        from fastapi import HTTPException, status
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid project_id format: {project_id}"
+        )
 
     Manager = aliased(User)
 
@@ -54,7 +65,7 @@ def project_resource_allocation(
         )
         # ✅ FIX: shift comes from USER, not project_member
         .outerjoin(Shift, User.default_shift_id == Shift.id)
-        .filter(ProjectMember.project_id == project_id)
+        .filter(ProjectMember.project_id == project_id_uuid)
     )
 
     if only_active:
