@@ -23,7 +23,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# Basic role check (navigation already filters, but this is extra security)
+# Basic role check
 role = get_user_role()
 if not role or role not in ["ADMIN", "MANAGER"]:
     st.error("Access denied. Admin or Manager role required.")
@@ -239,9 +239,7 @@ def authenticated_request(method, endpoint, params=None, json_data=None, retries
     token = st.session_state.get("token")
     if not token:
         st.warning("🔒 Please login first.")
-        if st.button("➡️ Go to Login"):
-            st.session_state.clear()
-            st.rerun()
+        st.page_link("app.py", label="➡️ Go to Login")
         st.stop()
     
     headers = {"Authorization": f"Bearer {token}"}
@@ -420,7 +418,7 @@ def get_users_fallback():
                 "work_role": user.get("work_role", ""),
                 "is_active": user.get("is_active", True),
                 "allocated_projects": 0,  # We don't have this from simple endpoint
-                "today_status": "UNKNOWN",  # We don't have attendance from simple endpoint
+                "today_status": "ABSENT",  # Default to ABSENT if no attendance data
                 "shift_id": user.get("default_shift_id"),
                 "shift_name": None,
                 "rpm_user_id": user.get("rpm_user_id"),
@@ -544,7 +542,7 @@ with tab1:
                         "work_role": "",
                         "is_active": True,
                         "allocated_projects": 0,
-                        "today_status": "UNKNOWN",
+                        "today_status": "ABSENT",
                         "shift_id": None,
                         "shift_name": None,
                         "rpm_user_id": None,
@@ -606,17 +604,14 @@ with tab1:
     allocated_users = [u for u in user_role_users if u.get("allocated_projects", 0) > 0]
     not_allocated_users = [u for u in user_role_users if u.get("allocated_projects", 0) == 0]
     
-    # Categorize users by status - check all possible statuses
-    # Note: UNKNOWN is no longer used - default is ABSENT if not marked as present
+    # Categorize users by status - default to ABSENT if not marked as PRESENT
     present_users = []
     absent_users = []
     leave_users = []
-    wfh_users = []
-    other_status_users = []
     
     for u in user_role_users:
         status = u.get("today_status")
-        # Handle None, empty string, and missing key - default to ABSENT
+        # Handle None, empty string, and missing key - default to ABSENT if not marked as present
         if not status or status == "":
             absent_users.append(u)  # Default to ABSENT if no status
         elif status == "PRESENT":
@@ -626,19 +621,19 @@ with tab1:
         elif status == "LEAVE":
             leave_users.append(u)
         elif status == "WFH":
-            wfh_users.append(u)
+            # WFH users are counted as ABSENT for total calculation
+            absent_users.append(u)
         else:
-            # Any other status value (shouldn't happen, but handle gracefully)
-            other_status_users.append(u)
+            # Any other status value - default to absent
+            absent_users.append(u)
     
     # Calculate counts for display
     present_count = len(present_users)
-    absent_count = len(absent_users)
+    absent_count = len(absent_users)  # Includes WFH users
     leave_count = len(leave_users)
-    wfh_count = len(wfh_users)
-    other_status_count = len(other_status_users)
-    # Verify: total should equal all statuses combined (no more UNKNOWN)
-    calculated_total = present_count + absent_count + leave_count + wfh_count + other_status_count
+    
+    # Verify: Present + Absent + Leave should equal Total Users
+    calculated_total = present_count + absent_count + leave_count
     
     # Create user name mapping from the data we already have (fallback for get_user_name_mapping)
     # Store it in session state so other parts of the page can use it
@@ -660,36 +655,6 @@ with tab1:
         st.write(f"**Users Data:** {len(users_data) if users_data else 0} users loaded")
         st.write(f"**User Role Users:** {len(user_role_users)} users after filtering")
         st.write(f"**Name Mapping:** {len(st.session_state.get('user_name_mapping_fallback', {}))} users in mapping")
-        
-        # Status breakdown debug
-        st.write(f"**Status Breakdown:**")
-        st.write(f"- Present: {present_count}")
-        st.write(f"- Absent: {absent_count}")
-        st.write(f"- Leave: {leave_count}")
-        st.write(f"- WFH: {wfh_count}")
-        st.write(f"- Other: {other_status_count}")
-        st.write(f"- Calculated Total: {calculated_total}")
-        st.write(f"- Actual Total: {total_users}")
-        
-        # Show users with missing or unexpected statuses
-        if calculated_total != total_users:
-            st.write(f"**⚠️ Users not accounted for:** {total_users - calculated_total}")
-            unaccounted = []
-            accounted_user_ids = set()
-            for u in present_users + absent_users + leave_users + wfh_users + other_status_users:
-                accounted_user_ids.add(str(u.get("id", "")))
-            for u in user_role_users:
-                if str(u.get("id", "")) not in accounted_user_ids:
-                    unaccounted.append({
-                        "id": u.get("id"),
-                        "name": u.get("name", "Unknown"),
-                        "status": u.get("today_status", "MISSING"),
-                        "has_status": "today_status" in u
-                    })
-            if unaccounted:
-                st.write(f"**Unaccounted users:**")
-                st.json(unaccounted[:5])  # Show first 5
-        
         if users_data:
             st.write(f"**Sample user:** {users_data[0] if users_data else 'None'}")
         if st.session_state.get('user_name_mapping_fallback'):
@@ -698,7 +663,8 @@ with tab1:
     
     # SECTION 1: USER DASHBOARD
     st.markdown("## 👥 User Overview")
-    st.markdown("Dashboard showing Total users count with role 'USER', Count of present, absent, allocated and not allocated/unknown")
+    st.markdown("Dashboard showing Total users count with role 'USER', Count of present, absent, leave, allocated and not allocated")
+    st.caption("📊 **How Total Users are Calculated:** Total Users = All users in the system with role 'USER' (excluding ADMIN and MANAGER roles). Total Users = Present + Absent + Leave. WFH users are included in the Absent count.")
     
     # Display clickable metrics
     col1, col2, col3, col4, col5, col6 = st.columns(6)
@@ -709,7 +675,6 @@ with tab1:
     if "user_list_data" not in st.session_state:
         st.session_state.user_list_data = []
     
-    # Counts are already calculated above (before debug section)
     with col1:
         if st.button(f"**Total Users**\n\n{total_users}", use_container_width=True, key="btn_total_users"):
             st.session_state.show_user_list = "total"
@@ -738,18 +703,18 @@ with tab1:
             st.rerun()
     
     with col4:
-        if st.button(f"**Allocated**\n\n{len(allocated_users)}", use_container_width=True, key="btn_allocated"):
-            st.session_state.show_user_list = "allocated"
-            st.session_state.user_list_data = allocated_users
+        if st.button(f"**Leave**\n\n{leave_count}", use_container_width=True, key="btn_leave"):
+            st.session_state.show_user_list = "leave"
+            st.session_state.user_list_data = leave_users
             # Clear project list state to avoid conflicts
             st.session_state.show_project_list = None
             st.session_state.project_list_data = None
             st.rerun()
     
     with col5:
-        if st.button(f"**Leave**\n\n{leave_count}", use_container_width=True, key="btn_leave"):
-            st.session_state.show_user_list = "leave"
-            st.session_state.user_list_data = leave_users
+        if st.button(f"**Allocated**\n\n{len(allocated_users)}", use_container_width=True, key="btn_allocated"):
+            st.session_state.show_user_list = "allocated"
+            st.session_state.user_list_data = allocated_users
             # Clear project list state to avoid conflicts
             st.session_state.show_project_list = None
             st.session_state.project_list_data = None
@@ -764,27 +729,11 @@ with tab1:
             st.session_state.project_list_data = None
             st.rerun()
     
-    # Show breakdown info: All statuses should equal Total
-    breakdown_parts = []
-    if present_count > 0:
-        breakdown_parts.append(f"Present ({present_count})")
-    if absent_count > 0:
-        breakdown_parts.append(f"Absent ({absent_count})")
-    if leave_count > 0:
-        breakdown_parts.append(f"Leave ({leave_count})")
-    if wfh_count > 0:
-        breakdown_parts.append(f"WFH ({wfh_count})")
-    if other_status_count > 0:
-        # Get unique other statuses for display
-        other_statuses = set(u.get("today_status") for u in other_status_users if u.get("today_status"))
-        breakdown_parts.append(f"Other ({other_status_count}: {', '.join(other_statuses)})")
-    
-    breakdown_str = " + ".join(breakdown_parts) if breakdown_parts else "No status data"
-    
-    if calculated_total != total_users:
-        st.warning(f"⚠️ **Mismatch:** {breakdown_str} = {calculated_total} | Total Users: {total_users} (Difference: {total_users - calculated_total})")
+    # Explanation text for attendance status logic
+    if calculated_total == total_users:
+        st.caption(f"ℹ️ **Status Breakdown:** Present ({present_count}) + Absent ({absent_count}) + Leave ({leave_count}) = {calculated_total} | Total Users: {total_users} ✅")
     else:
-        st.caption(f"ℹ️ **Breakdown:** {breakdown_str} = {calculated_total}")
+        st.warning(f"⚠️ **Mismatch:** Present ({present_count}) + Absent ({absent_count}) + Leave ({leave_count}) = {calculated_total} | Total Users: {total_users} (Difference: {total_users - calculated_total})")
     
     # Show exportable list popup when a button is clicked
     # Only show dialog if explicitly triggered (not on page reload)
@@ -1474,7 +1423,7 @@ with tab3:
     
     with f4:
         status_filter = st.selectbox(
-            "Status", ["ALL", "PRESENT", "ABSENT", "LEAVE", "UNKNOWN"], key="detail_status"
+            "Status", ["ALL", "PRESENT", "ABSENT", "LEAVE"], key="detail_status"
         )
     
     with f5:
@@ -1514,23 +1463,12 @@ with tab3:
                 present = sum(r["attendance_status"] == "PRESENT" for r in filtered)
                 absent = sum(r["attendance_status"] == "ABSENT" for r in filtered)
                 leave = sum(r["attendance_status"] == "LEAVE" for r in filtered)
-                unknown = sum(r["attendance_status"] == "UNKNOWN" for r in filtered)
                 
-                # Verify breakdown
-                status_total = present + absent + leave + unknown
-                
-                c1, c2, c3, c4, c5 = st.columns(5)
+                c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Allocated", allocated)
                 c2.metric("Present", present)
                 c3.metric("Absent", absent)
                 c4.metric("Leave", leave)
-                c5.metric("Unknown", unknown)
-                
-                # Show breakdown to verify calculation
-                if status_total != allocated:
-                    st.caption(f"ℹ️ **Breakdown:** Present ({present}) + Absent ({absent}) + Leave ({leave}) + Unknown ({unknown}) = {status_total} | Allocated: {allocated}")
-                else:
-                    st.caption(f"ℹ️ **Breakdown:** Present ({present}) + Absent ({absent}) + Leave ({leave}) + Unknown ({unknown}) = {status_total}")
                 
                 # Allocation List - Show as popup
                 st.subheader("👥 Allocation List")

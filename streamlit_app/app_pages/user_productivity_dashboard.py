@@ -767,45 +767,213 @@ with chart_col5:
 
 with chart_col6:
     st.markdown("#### Quality Score Trend (Manually Assessed)")
-    # Filter to only assessed days and group by date
-    assessed_df = df_filtered[df_filtered["quality_rating"] != "Not Assessed"].copy()
     
-    if len(assessed_df) > 0:
-        # Filter to only days with valid quality scores
-        assessed_with_scores = assessed_df[assessed_df["quality_score"].notna()].copy()
-        if len(assessed_with_scores) > 0:
-            quality_by_date = assessed_with_scores.groupby("date")["quality_score"].mean().reset_index()
-            quality_by_date = quality_by_date.sort_values("date")
-            
-            if len(quality_by_date) > 0:
-                fig6 = go.Figure()
-                fig6.add_trace(go.Scatter(
-                    x=quality_by_date["date"],
-                    y=quality_by_date["quality_score"],
-                    mode='lines+markers',
-                    name='Quality Score',
-                    line=dict(color='#9467bd', width=2),
-                    marker=dict(size=6)
-                ))
+    # Always create a figure to ensure chart is displayed
+    fig6 = go.Figure()
+    
+    # Check if df_filtered is empty or doesn't have required columns
+    if df_filtered.empty:
+        # Show empty chart with helpful message
+        fig6.update_layout(
+            height=400,
+            xaxis_title="Date",
+            yaxis_title="Quality Score",
+            yaxis=dict(range=[0, 10]),
+            annotations=[dict(
+                x=0.5,
+                y=0.5,
+                xref="paper",
+                yref="paper",
+                text="No data available for selected user/filters<br><br>Please select a user or adjust filters",
+                showarrow=False,
+                font=dict(size=14, color="gray")
+            )]
+        )
+        st.plotly_chart(fig6, use_container_width=True)
+        st.caption("ℹ️ No data found. Try selecting a different user or adjusting date range.")
+    elif "quality_rating" not in df_filtered.columns:
+        # Show empty chart if quality_rating column doesn't exist
+        fig6.update_layout(
+            height=400,
+            xaxis_title="Date",
+            yaxis_title="Quality Score",
+            yaxis=dict(range=[0, 10]),
+            annotations=[dict(
+                x=0.5,
+                y=0.5,
+                xref="paper",
+                yref="paper",
+                text="Quality data not available<br><br>Data structure may be incomplete",
+                showarrow=False,
+                font=dict(size=14, color="orange")
+            )]
+        )
+        st.plotly_chart(fig6, use_container_width=True)
+    else:
+        # Filter to only assessed days and group by date
+        assessed_df = df_filtered[df_filtered["quality_rating"] != "Not Assessed"].copy()
+        
+        if len(assessed_df) > 0:
+            # Filter to only days with valid quality scores
+            assessed_with_scores = assessed_df[assessed_df["quality_score"].notna()].copy()
+            if len(assessed_with_scores) > 0:
+                # For specific user mode, show individual data points; for all users, show average
+                if view_mode == "Specific User":
+                    # Show individual data points for the specific user
+                    quality_by_date = assessed_with_scores.groupby("date")["quality_score"].first().reset_index()
+                else:
+                    # Show average for all users
+                    quality_by_date = assessed_with_scores.groupby("date")["quality_score"].mean().reset_index()
                 
+                quality_by_date = quality_by_date.sort_values("date")
+                
+                if len(quality_by_date) > 0:
+                    # Add moving average for better trend visualization
+                    quality_by_date["moving_avg"] = calculate_moving_average(quality_by_date, "quality_score", window=7)
+                    
+                    fig6.add_trace(go.Scatter(
+                        x=quality_by_date["date"],
+                        y=quality_by_date["quality_score"],
+                        mode='lines+markers',
+                        name='Daily Quality Score',
+                        line=dict(color='#9467bd', width=2),
+                        marker=dict(size=6),
+                        opacity=0.7
+                    ))
+                    
+                    # Only show moving average if we have enough data points
+                    if len(quality_by_date) > 1:
+                        fig6.add_trace(go.Scatter(
+                            x=quality_by_date["date"],
+                            y=quality_by_date["moving_avg"],
+                            mode='lines',
+                            name='7-Day Moving Avg',
+                            line=dict(color='#2ca02c', width=3)
+                        ))
+                    
+                    fig6.update_layout(
+                        height=400,
+                        hovermode='x unified',
+                        xaxis_title="Date",
+                        yaxis_title="Quality Score",
+                        yaxis=dict(range=[0, 10]),
+                        showlegend=True
+                    )
+                    st.plotly_chart(fig6, use_container_width=True)
+                else:
+                    # Show empty chart with message
+                    fig6.update_layout(
+                        height=400,
+                        xaxis_title="Date",
+                        yaxis_title="Quality Score",
+                        yaxis=dict(range=[0, 10]),
+                        annotations=[dict(
+                            x=0.5,
+                            y=0.5,
+                            xref="paper",
+                            yref="paper",
+                            text="No quality score data available<br>Quality scores are calculated from assessments",
+                            showarrow=False,
+                            font=dict(size=14, color="gray")
+                        )]
+                    )
+                    st.plotly_chart(fig6, use_container_width=True)
+                    st.caption("ℹ️ Quality scores are calculated from manual assessments. Please assess quality to see trends.")
+            else:
+                # Show chart indicating no scores but assessments exist
                 fig6.update_layout(
                     height=400,
-                    hovermode='x unified',
                     xaxis_title="Date",
                     yaxis_title="Quality Score",
                     yaxis=dict(range=[0, 10]),
-                    showlegend=False
+                    annotations=[dict(
+                        x=0.5,
+                        y=0.5,
+                        xref="paper",
+                        yref="paper",
+                        text=f"Found {len(assessed_df)} assessed day(s)<br>but no quality scores available<br><br>Quality scores need to be calculated from assessments",
+                        showarrow=False,
+                        font=dict(size=14, color="orange")
+                    )]
                 )
                 st.plotly_chart(fig6, use_container_width=True)
-            else:
-                st.info("📊 No data to display")
+                st.caption("ℹ️ Quality ratings exist but quality scores are not calculated. Scores are derived from quality ratings.")
         else:
-            st.info("📊 No data to display")
-    else:
-        st.info("📊 No data to display")
+            # Show empty chart with helpful message
+            total_records = len(df_filtered)
+            fig6.update_layout(
+                height=400,
+                xaxis_title="Date",
+                yaxis_title="Quality Score",
+                yaxis=dict(range=[0, 10]),
+                annotations=[dict(
+                    x=0.5,
+                    y=0.5,
+                    xref="paper",
+                    yref="paper",
+                    text=f"No quality assessments found<br><br>Found {total_records} record(s) but none are assessed<br><br>Please assess quality ratings in Admin Projects",
+                    showarrow=False,
+                    font=dict(size=14, color="gray")
+                )]
+            )
+            st.plotly_chart(fig6, use_container_width=True)
+            st.caption("💡 **Tip**: Navigate to 'Admin Projects' from the sidebar to assess quality ratings. Once assessed, quality scores will appear here.")
 
 # =====================================================================
-# ROW 4: Cumulative Tasks vs Hours
+# ROW 4: User Quality Trend Chart
+# =====================================================================
+st.markdown("#### User Quality Trend Chart")
+# Filter to only assessed days with valid quality scores
+assessed_df = df_filtered[df_filtered["quality_rating"] != "Not Assessed"].copy()
+assessed_with_scores = assessed_df[assessed_df["quality_score"].notna()].copy()
+
+if len(assessed_with_scores) > 0:
+    # Group by date and user to show trends per user
+    quality_by_user_date = assessed_with_scores.groupby(["date", "user"])["quality_score"].mean().reset_index()
+    quality_by_user_date = quality_by_user_date.sort_values(["user", "date"])
+    
+    if len(quality_by_user_date) > 0:
+        fig_quality_trend = go.Figure()
+        
+        # Get unique users and assign colors
+        unique_users = quality_by_user_date["user"].unique()
+        colors = px.colors.qualitative.Set3
+        
+        for idx, user in enumerate(unique_users):
+            user_data = quality_by_user_date[quality_by_user_date["user"] == user]
+            fig_quality_trend.add_trace(go.Scatter(
+                x=user_data["date"],
+                y=user_data["quality_score"],
+                mode='lines+markers',
+                name=user,
+                line=dict(width=2),
+                marker=dict(size=4),
+                hovertemplate=f'<b>{user}</b><br>Date: %{{x}}<br>Quality Score: %{{y:.2f}}<extra></extra>'
+            ))
+        
+        fig_quality_trend.update_layout(
+            height=500,
+            hovermode='closest',
+            xaxis_title="Date",
+            yaxis_title="Quality Score",
+            yaxis=dict(range=[0, 10]),
+            showlegend=True,
+            legend=dict(
+                orientation="v",
+                yanchor="top",
+                y=1,
+                xanchor="left",
+                x=1.02
+            )
+        )
+        st.plotly_chart(fig_quality_trend, use_container_width=True)
+    else:
+        st.info("📊 No quality trend data to display")
+else:
+    st.info("📊 No quality assessments available. Quality ratings must be manually assessed to see trends.")
+
+# =====================================================================
+# ROW 5: Cumulative Tasks vs Hours
 # =====================================================================
 chart_col7 = st.columns(1)[0]
 

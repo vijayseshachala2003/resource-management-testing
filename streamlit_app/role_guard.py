@@ -3,6 +3,7 @@ import os
 
 import requests
 import streamlit as st
+from auth import require_auth
 
 
 ALLOWED_USER_PAGES = {
@@ -69,6 +70,13 @@ def _get_user_role() -> str:
         if isinstance(user, dict):
             role = user.get("role")
     return str(role).upper() if role else ""
+
+
+def get_user_role() -> str:
+    """
+    Public function to get user role - used by navigation system
+    """
+    return _get_user_role()
 
 
 def _hide_default_sidebar_nav() -> None:
@@ -197,6 +205,9 @@ def _render_admin_sidebar_nav() -> None:
 
 
 def setup_role_access(current_file: str) -> None:
+    # Check authentication first - redirect to login if not authenticated
+    require_auth()
+    
     # Hide default sidebar navigation IMMEDIATELY, before any role checks
     # This ensures the default nav is hidden even if role check has latency
     hide_sidebar_nav_immediately()
