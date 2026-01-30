@@ -382,7 +382,12 @@ with col_left:
                         st.date_input("End Date", value=None, disabled=True)
                 else:
                     if start_date:
-                        end_date = st.date_input("End Date", value=None, min_value=start_date)
+                        end_date = st.date_input(
+                            "End Date",
+                            value=start_date,
+                            min_value=start_date,
+                            key="end_date_input",
+                        )
                     else:
                         end_date = None
                         st.date_input("End Date", value=None, min_value=None)
