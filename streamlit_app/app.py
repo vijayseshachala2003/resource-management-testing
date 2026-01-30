@@ -11,12 +11,12 @@ if "token" not in st.session_state:
         """
         <style>
         [data-testid="stSidebarNav"] { display: none; }
+        [data-testid="stSidebar"] { display: none; }
         </style>
         """,
         unsafe_allow_html=True,
     )
-    st.sidebar.markdown("### Navigation")
-    st.sidebar.page_link("app.py", label="Login")
+    st.sidebar.empty()
 
 require_auth()
 
