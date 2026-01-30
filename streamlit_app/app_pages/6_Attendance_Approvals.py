@@ -5,7 +5,7 @@ from datetime import datetime
 from role_guard import get_user_role
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Attendance Request Approvals", layout="wide")
+st.set_page_config(page_title="Leave/WFH Request Approvals", layout="wide")
 
 # Basic role check
 role = get_user_role()
@@ -41,7 +41,7 @@ def authenticated_request(method, endpoint, data=None, params=None):
 
 
 def get_pending_requests(request_type=None):
-    """Fetch pending attendance requests that need approval"""
+    """Fetch pending leave/WFH requests that need approval"""
     params = {"status": "PENDING"}
     if request_type and request_type != "All":
         params["request_type"] = request_type
@@ -49,7 +49,7 @@ def get_pending_requests(request_type=None):
 
 
 def get_all_requests(status=None, request_type=None):
-    """Fetch all attendance requests with optional filters"""
+    """Fetch all leave/WFH requests with optional filters"""
     params = {}
     if status and status != "All":
         params["status"] = status
@@ -98,7 +98,7 @@ def update_approval(approval_id, decision, comment):
 
 
 # --- PAGE HEADER ---
-st.title("📋 Attendance Request Approvals")
+st.title("📋 Leave/WFH Request Approvals")
 
 # --- LOAD FILTERS ---
 projects = authenticated_request("GET", "/admin/projects") or []
@@ -128,7 +128,7 @@ tab1, tab2, tab3 = st.tabs(["📥 Pending Requests", "📜 Approval History", "�
 # TAB 1: PENDING REQUESTS
 # =====================
 with tab1:
-    st.subheader("Pending Attendance Requests")
+    st.subheader("Pending Leave/WFH Requests")
     
     # Filters Row
     f_col1, f_col2, f_col3, f_col4 = st.columns([1.5, 1.5, 1, 1])

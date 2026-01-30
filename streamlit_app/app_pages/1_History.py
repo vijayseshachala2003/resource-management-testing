@@ -5,18 +5,13 @@ import requests
 import os
 from datetime import datetime, timedelta, date
 from dotenv import load_dotenv
-from role_guard import get_user_role
+from role_guard import setup_role_access
 
 load_dotenv()
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="User History", layout="wide")
-
-# Basic role check
-role = get_user_role()
-if not role or role not in ["USER", "ADMIN", "MANAGER"]:
-    st.error("Access denied. Please log in.")
-    st.stop()
+setup_role_access(__file__)
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
 
 # --- AUTH CHECK ---
@@ -88,9 +83,40 @@ with col5:
 st.markdown("---")
 
 # --- FETCH & FILTER DATA ---
+if "history_filters_applied" not in st.session_state:
+    st.session_state.history_filters_applied = False
+if "history_date_from" not in st.session_state:
+    st.session_state.history_date_from = default_date
+if "history_date_to" not in st.session_state:
+    st.session_state.history_date_to = default_date
+if "history_project_filter" not in st.session_state:
+    st.session_state.history_project_filter = "All Projects"
+if "history_role_filter" not in st.session_state:
+    st.session_state.history_role_filter = "All Roles"
+
+if apply_btn:
+    st.session_state.history_filters_applied = True
+    st.session_state.history_date_from = date_from
+    st.session_state.history_date_to = date_to
+    st.session_state.history_project_filter = project_filter
+    st.session_state.history_role_filter = role_filter
+
+if st.session_state.history_filters_applied:
+    active_date_from = st.session_state.history_date_from
+    active_date_to = st.session_state.history_date_to
+    active_project_filter = st.session_state.history_project_filter
+    active_role_filter = st.session_state.history_role_filter
+else:
+    active_date_from = default_date
+    active_date_to = default_date
+    active_project_filter = "All Projects"
+    active_role_filter = "All Roles"
+
 params = {}
-if date_from: params["start_date"] = str(date_from)
-if date_to: params["end_date"] = str(date_to)
+if active_date_from:
+    params["start_date"] = str(active_date_from)
+if active_date_to:
+    params["end_date"] = str(active_date_to)
 
 # 1. Fetch RAW activity logs (for the table & basic total stats)
 time_history = authenticated_request("GET", "/time/history", params=params)
@@ -121,11 +147,11 @@ if time_history:
     df_attendance = pd.DataFrame(attendance_raw)
     
     # Apply filters to main log df
-    if project_filter != "All Projects" and 'project_name' in df_logs.columns:
-        df_logs = df_logs[df_logs['project_name'] == project_filter]
+    if active_project_filter != "All Projects" and 'project_name' in df_logs.columns:
+        df_logs = df_logs[df_logs['project_name'] == active_project_filter]
     
-    if role_filter != "All Roles" and 'work_role' in df_logs.columns:
-        df_logs = df_logs[df_logs['work_role'] == role_filter]
+    if active_role_filter != "All Roles" and 'work_role' in df_logs.columns:
+        df_logs = df_logs[df_logs['work_role'] == active_role_filter]
     
     if df_logs.empty:
         st.info("📭 No records found for the selected filters.")
@@ -135,8 +161,8 @@ if time_history:
         if not df_metrics.empty:
             df_metrics['metric_date'] = pd.to_datetime(df_metrics['metric_date']).dt.date
             # Filter metrics for selected project if needed
-            if project_filter != "All Projects":
-                p_id = next((p["project_id"] for p in all_history if p.get("project_name") == project_filter), None)
+            if active_project_filter != "All Projects":
+                p_id = next((p["project_id"] for p in all_history if p.get("project_name") == active_project_filter), None)
                 if p_id:
                     df_metrics = df_metrics[df_metrics['project_id'] == str(p_id)]
         
@@ -152,15 +178,6 @@ if time_history:
         m_col1.metric("⏱️ Total Hours", f"{total_hours:.1f}h")
         m_col2.metric("✅ Tasks Completed", total_tasks)
         m_col3.metric("📈 Avg Productivity", f"{avg_score:.1f}/10")
-
-        # KPI Row 2: Attendance Distribution
-        if not df_attendance.empty:
-            a_counts = df_attendance['status'].value_counts().to_dict()
-            st.markdown("**🕒 Attendance Summary**")
-            ac1, ac2, ac3 = st.columns(3)
-            ac1.metric("Present", a_counts.get("PRESENT", 0))
-            ac2.metric("Absent", a_counts.get("ABSENT", 0))
-            ac3.metric("Leave", a_counts.get("LEAVE", 0))
 
         st.markdown("---")
 

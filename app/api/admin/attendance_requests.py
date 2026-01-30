@@ -20,7 +20,7 @@ from app.models.user import User
 
 router = APIRouter(
     prefix="/attendance/requests",
-    tags=["Attendance Requests"]
+    tags=["Leave/WFH Requests"]
 )
 
 # CREATE 
@@ -135,7 +135,7 @@ def delete_request(
 # =====================
 admin_router = APIRouter(
     prefix="/admin/attendance-requests",
-    tags=["Admin - Attendance Requests"]
+    tags=["Admin - Leave/WFH Requests"]
 )
 
 

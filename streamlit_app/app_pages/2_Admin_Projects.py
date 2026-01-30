@@ -145,8 +145,11 @@ with tab1:
     # KPI
     if projects_data:
         total_projects = len(projects_data)
-        active_projects = len([p for p in projects_data if p["is_active"]])
+        # Active: is_active=True AND no end_date
+        active_projects = len([p for p in projects_data if p["is_active"] and not p.get("end_date")])
+        # Paused: is_active=False AND no end_date
         paused_projects = len([p for p in projects_data if not p["is_active"] and not p.get("end_date")])
+        # Completed: has end_date (regardless of is_active)
         completed_projects = len([p for p in projects_data if p.get("end_date")])
 
         k1, k2, k3, k4 = st.columns(4)
@@ -167,10 +170,13 @@ with tab1:
     for p in projects_data:
         if search_text and search_text.lower() not in p["name"].lower() and search_text.lower() not in p["code"].lower():
             continue
-        if status_filter == "ACTIVE" and not p["is_active"]:
+        # Active: is_active=True AND no end_date
+        if status_filter == "ACTIVE" and (not p["is_active"] or p.get("end_date")):
             continue
+        # Paused: is_active=False AND no end_date
         if status_filter == "PAUSED" and (p["is_active"] or p.get("end_date")):
             continue
+        # Completed: has end_date (regardless of is_active)
         if status_filter == "COMPLETED" and not p.get("end_date"):
             continue
         filtered_projects.append(p)
