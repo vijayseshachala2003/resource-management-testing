@@ -31,7 +31,6 @@ class User(Base):
     # supabase_user_id = Column(UUID(as_uuid=True), unique=True, nullable=False)
     email = Column(String, unique=True, nullable=False)
     name = Column(String, nullable=False)
-    password_hash = Column(String, nullable=True)  # For JWT-based authentication
 
     # IMPORTANT: Enum mapping
     role = Column(Enum(UserRole, name="user_role"), nullable=False)

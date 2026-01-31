@@ -20,7 +20,7 @@ def send_attendance_request_decision_email(
     service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
     if not supabase_url or not service_role_key:
-        # Supabase Function not configured; skip email send.
+        print(f"[EMAIL] Skipped - Missing env vars. SUPABASE_URL={bool(supabase_url)}, SERVICE_ROLE_KEY={bool(service_role_key)}")
         return
 
     function_url = f"{supabase_url}/functions/v1/send-approval-email"
@@ -43,10 +43,13 @@ def send_attendance_request_decision_email(
         "Content-Type": "application/json",
     }
 
+    print(f"[EMAIL] Sending {decision} notification to {user_email} for {request_type} request...")
+
     try:
-        requests.post(function_url, json=payload, headers=headers, timeout=10)
-    except Exception:
-        # Avoid breaking approval flow on email failures
+        response = requests.post(function_url, json=payload, headers=headers, timeout=10)
+        print(f"[EMAIL] Response: status={response.status_code}, body={response.text[:200] if response.text else 'empty'}")
+    except Exception as e:
+        print(f"[EMAIL] Failed to send email to {user_email}: {e}")
         return
 
 
