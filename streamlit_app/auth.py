@@ -4,266 +4,223 @@ import requests
 from dotenv import load_dotenv
 from pathlib import Path
 
-# Try to load .env from streamlit_app directory first, then fallback to project root
+# Load environment variables
 streamlit_app_env = Path(__file__).parent / ".env"
 project_root_env = Path(__file__).parent.parent / ".env"
 
-# Load from streamlit_app/.env if it exists, otherwise try project root
 if streamlit_app_env.exists():
     load_dotenv(dotenv_path=streamlit_app_env)
 elif project_root_env.exists():
     load_dotenv(dotenv_path=project_root_env)
 else:
-    # Fallback to default behavior
     load_dotenv()
 
-# ============================================
-# AUTH TOGGLE CONFIGURATION
-# ============================================
-# To DISABLE Supabase Auth: Set DISABLE_AUTH=true in .env
-# To ENABLE Supabase Auth:  Set DISABLE_AUTH=false in .env
-# Must match backend setting in app/core/dependencies.py
-# ============================================
 DISABLE_AUTH = os.getenv("DISABLE_AUTH", "false").lower() == "true"
 
 
-def _set_user_session(res):
-    st.session_state["token"] = res.session.access_token
-    st.session_state["user"] = {
-        "id": res.user.id,
-        "email": res.user.email,
-        "name": res.user.user_metadata.get("name"),
-        "role": res.user.user_metadata.get("role", "USER"),
-    }
-    st.session_state["user_email"] = res.user.email
-    st.session_state["user_id"] = res.user.id
-    st.session_state["user_name"] = res.user.user_metadata.get("name", res.user.email)
-    st.session_state["user_role"] = res.user.user_metadata.get("role", "USER")
+def _hide_sidebar():
+    """Hide the sidebar using CSS."""
+    st.markdown(
+        """
+        <style>
+            [data-testid="stSidebar"] { display: none; }
+            [data-testid="stSidebarNav"] { display: none; }
+            section[data-testid="stSidebar"] { display: none; }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
 
-def _sync_role_from_backend() -> None:
-    token = st.session_state.get("token")
-    if not token:
-        return
+def _sync_role_from_backend(token: str):
+    """Sync user role from backend after OAuth login."""
     api_base_url = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
     headers = {"Authorization": f"Bearer {token}"}
+    
     try:
         response = requests.get(f"{api_base_url}/me/", headers=headers, timeout=5)
-        if response.status_code >= 400:
-            return
-        user = response.json()
+        if response.status_code == 200:
+            user_data = response.json()
+            st.session_state["user"] = user_data
+            st.session_state["user_email"] = user_data.get("email", st.session_state.get("user_email"))
+            st.session_state["user_id"] = user_data.get("id", st.session_state.get("user_id"))
+            st.session_state["user_name"] = user_data.get("name", st.session_state.get("user_name"))
+            st.session_state["user_role"] = user_data.get("role", "USER")
+            return True
+        elif response.status_code == 403:
+            st.session_state["_auth_error"] = "Access denied. Your email is not registered in the system."
+            return False
+        else:
+            return False
     except Exception:
+        return False
+
+
+def show_profile_section():
+    """Display profile icon in top right with dropdown."""
+    if "token" not in st.session_state:
         return
+    
+    user_name = st.session_state.get("user_name", "User") or "User"
+    user_email = st.session_state.get("user_email", "")
+    user_role = st.session_state.get("user_role", "USER")
+    avatar_url = st.session_state.get("user_avatar")
+    first_letter = (user_name[0] if user_name else "U").upper()
+    
+    if avatar_url:
+        avatar_small = f'<img src="{avatar_url}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">'
+        avatar_large = f'<img src="{avatar_url}" style="width:70px;height:70px;border-radius:50%;object-fit:cover;margin:0 auto 10px;">'
+    else:
+        avatar_small = f'<div style="width:36px;height:36px;border-radius:50%;background:#4285f4;color:white;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:16px;">{first_letter}</div>'
+        avatar_large = f'<div style="width:70px;height:70px;border-radius:50%;background:linear-gradient(135deg,#4285f4,#34a853);color:white;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:28px;margin:0 auto 10px;">{first_letter}</div>'
+    
+    st.markdown(
+        f"""
+        <style>
+        .profile-wrapper {{ position: fixed; top: 10px; right: 60px; z-index: 1000000; }}
+        .profile-btn {{ width: 36px; height: 36px; border-radius: 50%; border: none; padding: 0; cursor: pointer; background: transparent; }}
+        .profile-btn:hover {{ box-shadow: 0 1px 3px rgba(0,0,0,0.3); }}
+        .profile-dropdown {{ display: none; position: absolute; top: 45px; right: 0; background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); min-width: 280px; padding: 20px; z-index: 1000001; }}
+        .profile-wrapper:hover .profile-dropdown {{ display: block; }}
+        .profile-dropdown-name {{ font-size: 16px; font-weight: 600; color: #202124; margin-bottom: 4px; text-align: center; }}
+        .profile-dropdown-email {{ font-size: 13px; color: #5f6368; margin-bottom: 8px; text-align: center; }}
+        .profile-dropdown-role {{ display: inline-block; background: #e8f0fe; color: #1967d2; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 500; }}
+        </style>
+        <div class="profile-wrapper">
+            <button class="profile-btn">{avatar_small}</button>
+            <div class="profile-dropdown">
+                <div style="text-align:center;">{avatar_large}</div>
+                <div class="profile-dropdown-name">{user_name}</div>
+                <div class="profile-dropdown-email">{user_email}</div>
+                <div style="text-align:center;"><span class="profile-dropdown-role">{user_role}</span></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    
+    with st.sidebar:
+        if st.button("🚪 Sign out", key="logout_btn", use_container_width=True):
+            logout()
+        st.markdown("---")
 
-    if isinstance(user, dict):
-        st.session_state["user"] = user
-        st.session_state["user_role"] = user.get("role", st.session_state.get("user_role"))
-        if user.get("name"):
-            st.session_state["user_name"] = user.get("name")
 
-
-def _redirect_after_login():
-    # With st.navigation, we just rerun the app to show the navigation
-    # The navigation system will automatically show the appropriate pages based on role
+def logout():
+    """Log out the user."""
+    st.session_state.clear()
     st.rerun()
 
 
-def _get_query_param(name: str):
-    try:
-        value = st.query_params.get(name)
-        if isinstance(value, list):
-            return value[0] if value else None
-        return value
-    except Exception:
-        return st.experimental_get_query_params().get(name, [None])[0]
-
-
-def _clear_query_params():
-    try:
-        st.query_params.clear()
-    except Exception:
-        st.experimental_set_query_params()
-
 def login_ui():
+    """Show login page with Google OAuth."""
+    _hide_sidebar()
     st.title("Login")
     
+    # Show auth errors if any
+    if st.session_state.get("_auth_error"):
+        st.error(f"❌ {st.session_state['_auth_error']}")
+        st.info("💡 Please contact an administrator to get access.")
+        del st.session_state["_auth_error"]
+    
+    # Check for error in URL
+    error = st.query_params.get("error")
+    if error:
+        error_desc = st.query_params.get("error_description", "Unknown error")
+        st.warning(f"⚠️ {error_desc}")
+        st.query_params.clear()
+    
     if DISABLE_AUTH:
-        # AUTH BYPASS MODE - No actual login required
-        st.info("🔓 Auth is currently disabled - Click below to continue")
-        
-        if st.button("Continue (No Auth Required)"):
-            # Set dummy token and user info for compatibility
+        st.info("🔓 Auth is disabled - Click below to continue")
+        if st.button("Continue"):
             st.session_state["token"] = "bypass_token"
-            st.session_state["user"] = {
-                "id": "local-admin",
-                "email": "admin@local.dev",
-                "name": "Local Admin",
-                "role": "ADMIN",
-            }
             st.session_state["user_email"] = "admin@local.dev"
             st.session_state["user_id"] = "local-admin"
             st.session_state["user_name"] = "Local Admin"
             st.session_state["user_role"] = "ADMIN"
-            
-            st.success("Logged in successfully (Bypass Mode)")
             st.rerun()
-    else:
-        # SUPABASE AUTH MODE - Normal login flow
-        from supabase_client import supabase
-
-        # Handle OAuth callback (redirect back with ?code=)
-        auth_code = _get_query_param("code")
-        if auth_code and st.session_state.get("oauth_handled") != auth_code:
-            try:
-                try:
-                    res = supabase.auth.exchange_code_for_session({"auth_code": auth_code})
-                except TypeError:
-                    res = supabase.auth.exchange_code_for_session(auth_code)
-
-                if res and res.session:
-                    _set_user_session(res)
-                    _sync_role_from_backend()
-                    st.session_state["oauth_handled"] = auth_code
-                    _clear_query_params()
-                    st.success("Logged in successfully")
-                    _redirect_after_login()
-            except Exception as e:
-                st.error(f"Google OAuth failed: {e}")
-
-        st.subheader("🔵 Continue with Google")
-        st.caption("Quick sign-in with your Google account. Works alongside email/password authentication.")
-        redirect_to = os.getenv("SUPABASE_REDIRECT_URL", "http://localhost:8501")
-        if "google_oauth_url" not in st.session_state:
-            try:
-                result = supabase.auth.sign_in_with_oauth({
-                    "provider": "google",
-                    "options": {"redirect_to": redirect_to},
-                })
-                url = None
-                if isinstance(result, dict):
-                    url = result.get("url") or (result.get("data") or {}).get("url")
+        return
+    
+    from supabase_client import supabase
+    
+    # Handle OAuth callback with code
+    code = st.query_params.get("code")
+    if code:
+        try:
+            res = supabase.auth.exchange_code_for_session({"auth_code": code})
+            
+            if res and res.session:
+                token = res.session.access_token
+                
+                # Store basic info from Supabase
+                st.session_state["token"] = token
+                st.session_state["user_email"] = res.user.email
+                st.session_state["user_id"] = res.user.id
+                st.session_state["user_name"] = res.user.user_metadata.get("name", "")
+                st.session_state["user_avatar"] = res.user.user_metadata.get("avatar_url") or res.user.user_metadata.get("picture")
+                
+                # Sync role from backend
+                if _sync_role_from_backend(token):
+                    st.query_params.clear()
+                    st.rerun()
                 else:
-                    url = getattr(result, "url", None)
-                    if not url and hasattr(result, "data"):
-                        url = getattr(result.data, "url", None)
-                if url:
-                    st.session_state["google_oauth_url"] = url
-            except Exception as e:
-                st.error(f"Google OAuth error: {e}")
-
-        if st.session_state.get("google_oauth_url"):
-            st.link_button("Login with Google", st.session_state["google_oauth_url"])
-        else:
-            st.button("Login with Google", disabled=True)
-
-        st.markdown("---")
+                    # User not authorized - clear everything
+                    st.session_state.clear()
+                    st.query_params.clear()
+                    st.rerun()
+        except Exception as e:
+            st.error(f"❌ Login failed: {e}")
+            st.info("Please try clicking the login button again.")
+            st.query_params.clear()
+        return
+    
+    # Show login button
+    st.subheader("🔵 Continue with Google")
+    st.caption("Sign in with your Google account to continue.")
+    
+    redirect_to = os.getenv("SUPABASE_REDIRECT_URL", "http://localhost:8501")
+    
+    try:
+        result = supabase.auth.sign_in_with_oauth({
+            "provider": "google",
+            "options": {"redirect_to": redirect_to},
+        })
         
-        # Email/Password Login (JWT)
-        st.markdown("### Email/Password Login")
-        st.caption("💡 **Note:** Both Google OAuth and Email/Password authentication work together. Use whichever method you prefer.")
-
-        email = st.text_input("Email", key="login_email")
-        password = st.text_input("Password", type="password", key="login_password")
-
-        if st.button("Login", key="login_btn"):
-            if not email or not password:
-                st.error("Please enter both email and password")
-                return
-            
-            # Try Supabase first, then fallback to backend database auth
-            login_success = False
-            error_msg = ""
-            
-            # Try Supabase authentication
-            try:
-                res = supabase.auth.sign_in_with_password({
-                    "email": email,
-                    "password": password,
-                })
-
-                if res.session:
-                    _set_user_session(res)
-                    st.success("✅ Logged in successfully (Supabase)")
-                    login_success = True
-                    _redirect_after_login()
-            except Exception as e:
-                error_msg = str(e)
-                # Supabase failed, try backend database auth
-                try:
-                    import requests
-                    from dotenv import load_dotenv
-                    
-                    load_dotenv()
-                    api_base_url = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
-                    
-                    response = requests.post(
-                        f"{api_base_url}/auth/login",
-                        json={"email": email, "password": password},
-                        timeout=10
-                    )
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        # Set session with backend token
-                        st.session_state["token"] = data["access_token"]
-                        st.session_state["user"] = {
-                            "id": data["user_id"],
-                            "email": data["user_email"],
-                            "name": data["user_name"],
-                            "role": data["user_role"],
-                        }
-                        st.session_state["user_email"] = data["user_email"]
-                        st.session_state["user_id"] = data["user_id"]
-                        st.session_state["user_name"] = data["user_name"]
-                        st.session_state["user_role"] = data["user_role"]
-                        
-                        auth_method = data.get("auth_method", "database")
-                        st.success(f"✅ Logged in successfully ({auth_method})")
-                        login_success = True
-                        _redirect_after_login()
-                    else:
-                        error_data = response.json() if response.content else {}
-                        error_msg = error_data.get("detail", "Login failed")
-                except requests.exceptions.RequestException:
-                    # Backend not available or network error
-                    pass
-                except Exception as backend_error:
-                    # Backend auth also failed
-                    pass
-            
-            # If both methods failed, show error
-            if not login_success:
-                if "Invalid login credentials" in error_msg or "invalid" in error_msg.lower() or "Invalid email or password" in error_msg:
-                    st.error("❌ Invalid email or password. Please check your credentials.")
-                    st.info("💡 **Tip:** This account might use Supabase or Database authentication. Try both methods or contact an administrator.")
-                elif "Email not confirmed" in error_msg:
-                    st.error("❌ Please verify your email address before logging in. Check your inbox for the confirmation email.")
-                elif "Too many requests" in error_msg:
-                    st.error("❌ Too many login attempts. Please wait a few minutes and try again.")
-                else:
-                    st.error(f"Login error: {error_msg}")
+        url = None
+        if isinstance(result, dict):
+            url = result.get("url") or (result.get("data") or {}).get("url")
+        else:
+            url = getattr(result, "url", None)
+            if not url and hasattr(result, "data"):
+                url = getattr(result.data, "url", None)
+        
+        if url:
+            # Store URL in session state for the button to use
+            st.session_state["_oauth_url"] = url
+        else:
+            st.error("Could not generate login URL")
+    except Exception as e:
+        st.error(f"OAuth error: {e}")
+    
+    # Show login button that redirects in same tab
+    if st.button("🔵 Login with Google", use_container_width=True, type="primary"):
+        if "_oauth_url" in st.session_state:
+            # Use meta refresh to redirect in same window
+            st.markdown(
+                f'<meta http-equiv="refresh" content="0;url={st.session_state["_oauth_url"]}">',
+                unsafe_allow_html=True
+            )
 
 
 def require_auth():
-    """
-    Call this at the top of every protected page.
-    """
+    """Check authentication. Call at top of every page."""
     if DISABLE_AUTH:
-        # Auto-login in bypass mode
         if "token" not in st.session_state:
             st.session_state["token"] = "bypass_token"
-            st.session_state["user"] = {
-                "id": "local-admin",
-                "email": "admin@local.dev",
-                "name": "Local Admin",
-                "role": "ADMIN",
-            }
             st.session_state["user_email"] = "admin@local.dev"
             st.session_state["user_id"] = "local-admin"
             st.session_state["user_name"] = "Local Admin"
             st.session_state["user_role"] = "ADMIN"
     else:
-        # Normal auth check
         if "token" not in st.session_state:
             login_ui()
             st.stop()

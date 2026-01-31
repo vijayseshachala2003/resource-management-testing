@@ -2,11 +2,12 @@ import os
 import uuid
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy.dialects.postgresql import UUID
 from datetime import date
 
 from app.db.session import SessionLocal
 from app.models.user import User, UserRole
+
+# Note: uuid and date are still used in DISABLE_AUTH mode for creating local admin user
 
 # ============================================
 # AUTH TOGGLE CONFIGURATION
@@ -21,7 +22,7 @@ DISABLE_AUTH = os.getenv("DISABLE_AUTH", "true").lower() == "true"
 if DISABLE_AUTH:
     print("🔓 AUTH MODE: DISABLED (Bypass Mode - No authentication required)")
 else:
-    print("🔒 AUTH MODE: ENABLED (Supabase Authentication Required)")
+    print("🔒 AUTH MODE: ENABLED (Supabase Google Authentication Required)")
 
 def get_db():
     db = SessionLocal()
@@ -60,17 +61,15 @@ if DISABLE_AUTH:
 
         return user
 else:
-    # Hybrid Auth Mode - Supports both Supabase and JWT tokens
+    # Supabase Auth Mode - Google OAuth only
     from app.core.supabase_auth import get_user_from_token
-    from app.core.security import decode_access_token
     
     def get_current_user(
         authorization: str = Header(...),
         db: Session = Depends(get_db),
     ) -> User:
         """
-        HYBRID AUTH MODE - Validates both JWT and Supabase tokens.
-        Tries JWT first, then falls back to Supabase if JWT validation fails.
+        SUPABASE AUTH MODE - Validates Supabase tokens from Google OAuth.
         """
         if not authorization.startswith("Bearer "):
             raise HTTPException(
@@ -80,53 +79,31 @@ else:
 
         token = authorization.replace("Bearer ", "")
         
-        # Try JWT authentication first
-        try:
-            decoded = decode_access_token(token)
-            if decoded and decoded.get("type") == "access":
-                user_id = decoded.get("sub")
-                if user_id:
-                    user = db.query(User).filter(User.id == user_id).first()
-                    if user:
-                        if not user.is_active:
-                            raise HTTPException(
-                                status_code=status.HTTP_403_FORBIDDEN,
-                                detail="User is inactive",
-                            )
-                        return user
-        except HTTPException:
-            # JWT validation failed, try Supabase
-            pass
-        except Exception:
-            # JWT validation failed, try Supabase
-            pass
-        
-        # Fall back to Supabase authentication
+        # Validate token with Supabase
         try:
             supabase_user = get_user_from_token(token)
             
-            # Try finding user
+            # Try finding user by email - user MUST already exist in database
             user = db.query(User).filter(User.email == supabase_user.email).first()
             
-            # Auto-provision user if not exists
+            # Deny access if user doesn't exist in database
             if not user:
-                user = User(
-                    email=supabase_user.email,
-                    name=supabase_user.user_metadata.get("name", supabase_user.email.split("@")[0]),
-                    role=UserRole.USER,  # default role
-                    is_active=True,
-                    doj=date.today(),  # default DOJ
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. Your email is not registered in the system. Please contact an administrator.",
                 )
-                
-                db.add(user)
-                db.commit()
-                db.refresh(user)
+            
+            if not user.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="User is inactive",
+                )
             
             return user
+        except HTTPException:
+            raise
         except Exception:
-            # Both JWT and Supabase validation failed
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired token",
             )
-

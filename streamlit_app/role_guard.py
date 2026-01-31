@@ -3,7 +3,6 @@ import os
 
 import requests
 import streamlit as st
-from auth import require_auth
 
 
 ALLOWED_USER_PAGES = {
@@ -111,8 +110,8 @@ def _render_admin_sidebar_nav() -> None:
 
 
 def setup_role_access(current_file: str) -> None:
-    # Check authentication first - redirect to login if not authenticated
-    require_auth()
+    # Note: Authentication is already checked in app.py before pages run
+    # No need to call require_auth() here - it causes duplicate widget key errors
     
     # Hide default sidebar navigation IMMEDIATELY, before any role checks
     # This ensures the default nav is hidden even if role check has latency
