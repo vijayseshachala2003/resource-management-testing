@@ -604,12 +604,93 @@ with tab1:
     allocated_users = [u for u in user_role_users if u.get("allocated_projects", 0) > 0]
     not_allocated_users = [u for u in user_role_users if u.get("allocated_projects", 0) == 0]
     
+    # Fetch weekoffs for users to identify weekoff users
+    # Get today's weekday name (e.g., "MONDAY", "SUNDAY")
+    today_weekday = selected_date.strftime("%A").upper()
+    
+    # Fetch full user data with weekoffs from /admin/users/ endpoint
+    all_users_with_weekoffs = authenticated_request("GET", "/admin/users/", params={"limit": 1000}, show_error=False) or []
+    
+    # Create a mapping of user_id to weekoffs (store multiple ID formats for matching)
+    user_weekoffs_map = {}
+    user_id_variants_map = {}  # Map all ID variants to canonical ID
+    
+    for user in all_users_with_weekoffs:
+        if isinstance(user, dict):
+            user_id = str(user.get("id", "")).strip()
+            if not user_id or user_id == "None":
+                continue
+                
+            weekoffs = user.get("weekoffs", [])
+            # Convert weekoffs to list of strings - handle various formats
+            weekoff_strings = []
+            if weekoffs:
+                for w in weekoffs:
+                    weekoff_value = None
+                    # Handle different formats: string, enum object, dict
+                    if isinstance(w, str):
+                        weekoff_value = w.upper().strip()
+                    elif isinstance(w, dict):
+                        # Pydantic might serialize enum as {"value": "SATURDAY"} or {"name": "SATURDAY"}
+                        weekoff_value = (w.get("value") or w.get("name") or "").upper().strip()
+                    elif hasattr(w, 'value'):
+                        weekoff_value = str(w.value).upper().strip()
+                    elif hasattr(w, 'name'):
+                        weekoff_value = str(w.name).upper().strip()
+                    elif hasattr(w, '__str__'):
+                        weekoff_value = str(w).upper().strip()
+                    
+                    if weekoff_value and weekoff_value in ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"]:
+                        weekoff_strings.append(weekoff_value)
+            
+            if weekoff_strings:
+                # Store with canonical ID
+                user_weekoffs_map[user_id] = weekoff_strings
+                # Also store ID variants for flexible matching
+                user_id_lower = user_id.lower()
+                user_id_upper = user_id.upper()
+                user_id_no_dashes = user_id.replace("-", "")
+                user_id_variants_map[user_id_lower] = user_id
+                user_id_variants_map[user_id_upper] = user_id
+                user_id_variants_map[user_id_no_dashes] = user_id
+                user_id_variants_map[user_id_no_dashes.lower()] = user_id
+                
+                # Debug: Print all users with weekoffs
+                print(f"[DEBUG WEEKOFF] User '{user.get('name', 'Unknown')}' (ID: {user_id}): weekoffs={weekoff_strings}, today={today_weekday}, match={today_weekday in weekoff_strings}")
+    
     # Categorize users by status - default to ABSENT if not marked as PRESENT
     present_users = []
     absent_users = []
     leave_users = []
+    weekoff_users = []
     
     for u in user_role_users:
+        user_id = str(u.get("id", "")).strip()
+        if not user_id or user_id == "None":
+            continue
+            
+        # Try to find canonical ID using variants map
+        canonical_id = user_id_variants_map.get(user_id.lower(), user_id)
+        canonical_id = user_id_variants_map.get(user_id.upper(), canonical_id)
+        canonical_id = user_id_variants_map.get(user_id.replace("-", ""), canonical_id)
+        
+        # Check if today is a weekoff for this user
+        user_weekoffs = user_weekoffs_map.get(canonical_id, user_weekoffs_map.get(user_id, []))
+        is_weekoff_today = today_weekday in user_weekoffs if user_weekoffs else False
+        
+        # Debug: Log weekoff check for users with weekoffs or potential matches
+        if user_weekoffs or len(weekoff_users) < 5:
+            print(f"[DEBUG CHECK] User '{u.get('name', 'Unknown')}' (ID: {user_id}): canonical={canonical_id}, weekoffs={user_weekoffs}, today={today_weekday}, match={is_weekoff_today}")
+        
+        if is_weekoff_today:
+            # Create a copy of the user dict and update status to WEEKOFF
+            weekoff_user = u.copy()
+            weekoff_user["today_status"] = "WEEKOFF"
+            weekoff_users.append(weekoff_user)
+            print(f"[DEBUG MATCH] ✅ User '{u.get('name', 'Unknown')}' added to weekoff list with status WEEKOFF!")
+            # Don't add to other categories if it's a weekoff
+            continue
+        
         status = u.get("today_status")
         # Handle None, empty string, and missing key - default to ABSENT if not marked as present
         if not status or status == "":
@@ -631,6 +712,7 @@ with tab1:
     present_count = len(present_users)
     absent_count = len(absent_users)  # Includes WFH users
     leave_count = len(leave_users)
+    weekoff_count = len(weekoff_users)
     
     # Verify: Present + Absent + Leave should equal Total Users
     calculated_total = present_count + absent_count + leave_count
@@ -650,11 +732,59 @@ with tab1:
         st.session_state.user_name_mapping_fallback = {}
         print(f"[DEBUG] No users_data, setting empty name mapping")
     
+    # Debug: Check if any users with weekoffs are not in user_role_users
+    user_role_user_ids = {str(u.get("id", "")).strip() for u in user_role_users}
+    # Also create normalized versions (lowercase, no dashes) for comparison
+    user_role_user_ids_normalized = set()
+    for uid in user_role_user_ids:
+        if uid and uid != "None":
+            user_role_user_ids_normalized.add(uid.lower())
+            user_role_user_ids_normalized.add(uid.replace("-", "").lower())
+    
+    weekoff_user_ids_in_map = set()
+    for uid, weekoffs in user_weekoffs_map.items():
+        if today_weekday in weekoffs:
+            weekoff_user_ids_in_map.add(uid)
+            weekoff_user_ids_in_map.add(uid.lower())
+            weekoff_user_ids_in_map.add(uid.replace("-", "").lower())
+    
+    # Find users with weekoffs that are not in the role list
+    weekoff_users_not_in_role_list = []
+    for uid, weekoffs in user_weekoffs_map.items():
+        if today_weekday in weekoffs:
+            uid_normalized = uid.lower()
+            uid_no_dashes = uid.replace("-", "").lower()
+            if uid not in user_role_user_ids and uid_normalized not in user_role_user_ids_normalized and uid_no_dashes not in user_role_user_ids_normalized:
+                # Find user name
+                for user in all_users_with_weekoffs:
+                    if isinstance(user, dict) and str(user.get("id", "")).strip() == uid:
+                        weekoff_users_not_in_role_list.append({
+                            "id": uid,
+                            "name": user.get("name", "Unknown"),
+                            "role": user.get("role", "Unknown"),
+                            "weekoffs": weekoffs
+                        })
+                        break
+    
     # Debug display in UI (collapsible)
     with st.expander("🔍 Debug Info (Click to see)", expanded=False):
         st.write(f"**Users Data:** {len(users_data) if users_data else 0} users loaded")
         st.write(f"**User Role Users:** {len(user_role_users)} users after filtering")
         st.write(f"**Name Mapping:** {len(st.session_state.get('user_name_mapping_fallback', {}))} users in mapping")
+        st.write(f"**Today's Weekday:** {today_weekday}")
+        st.write(f"**Users with Weekoffs Mapped:** {len(user_weekoffs_map)} users")
+        st.write(f"**Users with Today as Weekoff (in map):** {len(weekoff_user_ids_in_map)} users")
+        st.write(f"**Weekoff Users Found (in role list):** {weekoff_count} users")
+        if weekoff_users_not_in_role_list:
+            st.warning(f"⚠️ **{len(weekoff_users_not_in_role_list)} user(s) with weekoff today are NOT in the USER role list!** They may be ADMIN/MANAGER or filtered out.")
+            missing_info = []
+            for missing_user in weekoff_users_not_in_role_list[:5]:
+                missing_info.append(f"{missing_user['name']} (Role: {missing_user['role']}, Weekoffs: {missing_user['weekoffs']})")
+            if missing_info:
+                st.write(f"**Missing users:** {', '.join(missing_info)}")
+        if user_weekoffs_map:
+            sample_weekoffs = dict(list(user_weekoffs_map.items())[:3])
+            st.write(f"**Sample Weekoffs Mapping:** {sample_weekoffs}")
         if users_data:
             st.write(f"**Sample user:** {users_data[0] if users_data else 'None'}")
         if st.session_state.get('user_name_mapping_fallback'):
@@ -663,11 +793,11 @@ with tab1:
     
     # SECTION 1: USER DASHBOARD
     st.markdown("## 👥 User Overview")
-    st.markdown("Dashboard showing Total users count with role 'USER', Count of present, absent, leave, allocated and not allocated")
-    st.caption("📊 **How Total Users are Calculated:** Total Users = All users in the system with role 'USER' (excluding ADMIN and MANAGER roles). Total Users = Present + Absent + Leave. WFH users are included in the Absent count.")
+    st.markdown("Dashboard showing Total users count with role 'USER', Count of present, absent, leave, allocated, not allocated, and weekoff")
+    st.caption("📊 **How Total Users are Calculated:** Total Users = All users in the system with role 'USER' (excluding ADMIN and MANAGER roles). Total Users = Present + Absent + Leave + Weekoff. WFH users are included in the Absent count. Weekoff users are determined by checking if today's weekday matches their configured weekoff days.")
     
     # Display clickable metrics
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
     
     # Initialize session state for modals (already initialized at top level)
     if "show_user_list" not in st.session_state:
@@ -729,11 +859,22 @@ with tab1:
             st.session_state.project_list_data = None
             st.rerun()
     
+    with col7:
+        if st.button(f"**Weekoff**\n\n{weekoff_count}", use_container_width=True, key="btn_weekoff"):
+            st.session_state.show_user_list = "weekoff"
+            st.session_state.user_list_data = weekoff_users
+            # Clear project list state to avoid conflicts
+            st.session_state.show_project_list = None
+            st.session_state.project_list_data = None
+            st.rerun()
+    
     # Explanation text for attendance status logic
-    if calculated_total == total_users:
-        st.caption(f"ℹ️ **Status Breakdown:** Present ({present_count}) + Absent ({absent_count}) + Leave ({leave_count}) = {calculated_total} | Total Users: {total_users} ✅")
+    # Note: Weekoff users are excluded from Present/Absent/Leave counts
+    total_without_weekoff = present_count + absent_count + leave_count
+    if total_without_weekoff + weekoff_count == total_users:
+        st.caption(f"ℹ️ **Status Breakdown:** Present ({present_count}) + Absent ({absent_count}) + Leave ({leave_count}) + Weekoff ({weekoff_count}) = {total_users} | Total Users: {total_users} ✅")
     else:
-        st.warning(f"⚠️ **Mismatch:** Present ({present_count}) + Absent ({absent_count}) + Leave ({leave_count}) = {calculated_total} | Total Users: {total_users} (Difference: {total_users - calculated_total})")
+        st.warning(f"⚠️ **Mismatch:** Present ({present_count}) + Absent ({absent_count}) + Leave ({leave_count}) + Weekoff ({weekoff_count}) = {total_without_weekoff + weekoff_count} | Total Users: {total_users} (Difference: {total_users - (total_without_weekoff + weekoff_count)})")
     
     # Show exportable list popup when a button is clicked
     # Only show dialog if explicitly triggered (not on page reload)
@@ -748,7 +889,8 @@ with tab1:
             "absent": "Absent Users",
             "leave": "Leave Users",
             "allocated": "Allocated Users",
-            "not_allocated": "Not Allocated Users"
+            "not_allocated": "Not Allocated Users",
+            "weekoff": "Users on Weekoff Today"
         }.get(st.session_state.show_user_list, "Users")
         
         # Only show user list dialog if project list is not active

@@ -309,8 +309,10 @@ st.markdown("### 🔍 Filters")
 # Initialize filter state
 if "project_filters_applied" not in st.session_state:
     st.session_state.project_filters_applied = False
-if "project_filter_date_range" not in st.session_state:
-    st.session_state.project_filter_date_range = None
+if "project_filter_start_date" not in st.session_state:
+    st.session_state.project_filter_start_date = None
+if "project_filter_end_date" not in st.session_state:
+    st.session_state.project_filter_end_date = None
 if "project_filter_roles" not in st.session_state:
     st.session_state.project_filter_roles = []
 if "project_filter_projects" not in st.session_state:
@@ -319,15 +321,53 @@ if "project_filter_projects" not in st.session_state:
 filter_col1, filter_col2, filter_col3 = st.columns(3)
 
 with filter_col1:
-    min_date = df["date"].min().date()
-    max_date = df["date"].max().date()
-    date_range = st.date_input(
-        "Date Range",
-        value=st.session_state.project_filter_date_range if st.session_state.project_filter_date_range else (min_date, max_date),
+    data_min_date = df["date"].min().date()
+    data_max_date = df["date"].max().date()
+    today = date.today()
+    
+    # Allow selecting dates up to 1 year before the earliest data, or at least 1 year ago
+    # This allows users to select dates even if we haven't loaded that data yet
+    min_date = min(data_min_date, today - timedelta(days=365))
+    
+    # Allow selecting up to today, even if data doesn't include today yet
+    max_date = max(data_max_date, today)
+    
+    # Default to beginning of current month to today
+    first_day_of_month = date(today.year, today.month, 1)
+    default_start = max(first_day_of_month, data_min_date)  # Use data_min_date for default, not min_date
+    default_end = min(today, max_date)  # Don't go after available data
+    
+    # Get existing dates from session state or use defaults
+    start_date_value = st.session_state.project_filter_start_date if st.session_state.project_filter_start_date else default_start
+    end_date_value = st.session_state.project_filter_end_date if st.session_state.project_filter_end_date else default_end
+    
+    # Ensure start_date <= end_date
+    if start_date_value > end_date_value:
+        start_date_value = default_start
+        end_date_value = default_end
+    
+    date_from = st.date_input(
+        "Date From",
+        value=start_date_value,
         min_value=min_date,
         max_value=max_date,
-        key="project_date_range"
+        key="project_date_from",
+        help=f"Select the start date (from {min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')})"
     )
+    
+    date_to = st.date_input(
+        "Date To",
+        value=end_date_value,
+        min_value=max(date_from, min_date),  # Ensure "to" date is >= "from" date
+        max_value=max_date,
+        key="project_date_to",
+        help=f"Select the end date (must be >= start date, up to {max_date.strftime('%Y-%m-%d')})"
+    )
+    
+    # Ensure start_date <= end_date after user selection
+    if date_from > date_to:
+        st.warning("⚠️ Start date cannot be after end date. Adjusting end date to match start date.")
+        date_to = date_from
 
 with filter_col2:
     all_roles = sorted(df["role"].unique())
@@ -358,7 +398,8 @@ with apply_col2:
 
 if apply_filters:
     st.session_state.project_filters_applied = True
-    st.session_state.project_filter_date_range = date_range
+    st.session_state.project_filter_start_date = date_from
+    st.session_state.project_filter_end_date = date_to
     st.session_state.project_filter_roles = filter_roles
     st.session_state.project_filter_projects = filter_projects
     st.rerun()
@@ -374,18 +415,18 @@ if st.session_state.project_filters_applied:
         df_filtered = df_filtered[df_filtered["project"].isin(st.session_state.project_filter_projects)]
     
     # Apply date filter
-    if st.session_state.project_filter_date_range and len(st.session_state.project_filter_date_range) == 2:
-        df_filtered = filter_data_by_date(df_filtered, st.session_state.project_filter_date_range[0], st.session_state.project_filter_date_range[1])
+    if st.session_state.project_filter_start_date and st.session_state.project_filter_end_date:
+        df_filtered = filter_data_by_date(df_filtered, st.session_state.project_filter_start_date, st.session_state.project_filter_end_date)
 else:
-    # Default: show all data without filters
-    pass
+    # Default: apply date range from beginning of month to today
+    df_filtered = filter_data_by_date(df_filtered, date_from, date_to)
 
 st.markdown("---")
 
 # =====================================================================
-# MONTHLY SUMMARY - KPI CARDS
+# SUMMARY - KPI CARDS
 # =====================================================================
-st.markdown("### 📈 Monthly Summary of Metrics")
+st.markdown("### 📈 Summary Metrics")
 kpi_col1, kpi_col2, kpi_col3, kpi_col4, kpi_col5, kpi_col6 = st.columns(6)
 
 with kpi_col1:
