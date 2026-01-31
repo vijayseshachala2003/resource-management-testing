@@ -26,7 +26,7 @@ PAGE_CONFIGS = {
     },
     "4_Attendance_Requests": {
         "file": "app_pages/4_Attendance_Requests.py",
-        "label": "Attendance Requests",
+        "label": "Leave/WFH Requests",
         "icon": "📅",
         "roles": ["USER"],
     },
@@ -66,15 +66,9 @@ PAGE_CONFIGS = {
         "icon": "🔧",
         "roles": ["ADMIN", "MANAGER"],
     },
-    "3_Admin": {
-        "file": "app_pages/3_Admin.py",
-        "label": "Admin Panel",
-        "icon": "⚙️",
-        "roles": ["ADMIN", "MANAGER"],
-    },
     "5_Approvals": {
         "file": "app_pages/5_Approvals.py",
-        "label": "Approvals",
+        "label": "Timesheet Approvals",
         "icon": "✅",
         "roles": ["ADMIN", "MANAGER"],
     },

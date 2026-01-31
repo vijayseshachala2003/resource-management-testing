@@ -524,12 +524,12 @@ unknown_users = [u for u in user_role_users if u.get("today_status") == "UNKNOWN
 # --- SECTION 1: TEAM OVERVIEW METRICS ---
 st.markdown("## 👥 Team Overview")
 if selected_project:
-    st.markdown(f"Dashboard showing team members for **{selected_project.get('name', 'Unknown')}** - total count, present, absent, allocated and not allocated/unknown")
+    st.markdown(f"Dashboard showing team members for **{selected_project.get('name', 'Unknown')}** - total count, present, and absent")
 else:
-    st.markdown("Dashboard showing your team members (people who share the same projects as you) - total count, present, absent, allocated and not allocated/unknown")
+    st.markdown("Dashboard showing your team members (people who share the same projects as you) - total count, present, and absent")
 
 # Display clickable metrics
-col1, col2, col3, col4, col5, col6 = st.columns(6)
+col1, col2, col3 = st.columns(3)
 
 # Initialize session state for modals
 if "show_user_list" not in st.session_state:
@@ -552,30 +552,12 @@ with col3:
         st.session_state.show_user_list = "absent"
         st.session_state.user_list_data = absent_users
 
-with col4:
-    if st.button(f"**Allocated**\n\n{len(allocated_users)}", use_container_width=True, key="btn_allocated"):
-        st.session_state.show_user_list = "allocated"
-        st.session_state.user_list_data = allocated_users
-
-with col5:
-    if st.button(f"**Not Allocated**\n\n{len(not_allocated_users)}", use_container_width=True, key="btn_not_allocated"):
-        st.session_state.show_user_list = "not_allocated"
-        st.session_state.user_list_data = not_allocated_users
-
-with col6:
-    if st.button(f"**Unknown**\n\n{len(unknown_users)}", use_container_width=True, key="btn_unknown"):
-        st.session_state.show_user_list = "unknown"
-        st.session_state.user_list_data = unknown_users
-
 # Show exportable list when a button is clicked
 if st.session_state.show_user_list and st.session_state.user_list_data:
     list_title = {
         "total": "All Users (Role: USER)",
         "present": "Present Users",
-        "absent": "Absent Users",
-        "allocated": "Allocated Users",
-        "not_allocated": "Not Allocated Users",
-        "unknown": "Unknown Status Users"
+        "absent": "Absent Users"
     }.get(st.session_state.show_user_list, "Users")
     
     st.markdown(f"### 📋 {list_title}")

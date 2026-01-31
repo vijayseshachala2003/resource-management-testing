@@ -3,12 +3,13 @@ import os
 
 import requests
 import streamlit as st
+from auth import require_auth
 
 
 ALLOWED_USER_PAGES = {
     "3_Home.py": "Home",
     "1_History.py": "History",
-    "4_Attendance_Requests.py": "Attendance Requests",
+    "4_Attendance_Requests.py": "Leave/WFH Requests",
     "2_Team_Stats.py": "Team Stats",
 }
 
@@ -18,8 +19,7 @@ ADMIN_ALLOWED_PAGES = {
     "project_productivity_dashboard.py": "Project Productivity",
     "05_Reports_Center.py": "Reports Center",
     "2_Admin_Projects.py": "Admin Projects",
-    "3_Admin.py": "Admin Panel",
-    "5_Approvals.py": "Approvals",
+    "5_Approvals.py": "Timesheet Approvals",
     "6_Attendance_Approvals.py": "Attendance Approvals",
 }
 
@@ -71,132 +71,49 @@ def _get_user_role() -> str:
     return str(role).upper() if role else ""
 
 
+def get_user_role() -> str:
+    """
+    Public function to get user role - used by navigation system
+    """
+    return _get_user_role()
+
+
 def _hide_default_sidebar_nav() -> None:
-    """Hide Streamlit's default sidebar navigation immediately using CSS and JS"""
-    # Always inject the CSS/JS on every call to ensure it works even after reruns
-    st.markdown(
-        """
-        <style>
-        /* Hide Streamlit's default sidebar navigation - multiple selectors for reliability */
-        [data-testid="stSidebarNav"] { 
-            display: none !important; 
-            visibility: hidden !important;
-            opacity: 0 !important;
-            height: 0 !important;
-            overflow: hidden !important;
-            width: 0 !important;
-            margin: 0 !important;
-            padding: 0 !important;
-        }
-        [data-testid="stSidebarNav"] ul,
-        [data-testid="stSidebarNav"] li,
-        [data-testid="stSidebarNav"] a {
-            display: none !important;
-        }
-        nav[data-testid="stSidebarNav"] {
-            display: none !important;
-        }
-        /* Hide any navigation elements in sidebar */
-        section[data-testid="stSidebar"] > div:first-child > div:first-child nav,
-        section[data-testid="stSidebar"] nav {
-            display: none !important;
-        }
-        /* Target the nav container directly */
-        div[data-testid="stSidebarNav"] {
-            display: none !important;
-        }
-        /* Additional fallback - hide any nav in sidebar */
-        section[data-testid="stSidebar"] nav,
-        section[data-testid="stSidebar"] > nav {
-            display: none !important;
-        }
-        </style>
-        <script>
-        // JavaScript fallback to hide navigation if CSS doesn't work fast enough
-        (function() {
-            function hideNav() {
-                const selectors = [
-                    '[data-testid="stSidebarNav"]',
-                    'section[data-testid="stSidebar"] nav',
-                    'section[data-testid="stSidebar"] > div:first-child nav'
-                ];
-                selectors.forEach(selector => {
-                    const elements = document.querySelectorAll(selector);
-                    elements.forEach(el => {
-                        if (el) {
-                            el.style.display = 'none';
-                            el.style.visibility = 'hidden';
-                            el.style.opacity = '0';
-                            el.style.height = '0';
-                            el.style.width = '0';
-                            el.style.margin = '0';
-                            el.style.padding = '0';
-                        }
-                    });
-                });
-            }
-            // Run immediately
-            hideNav();
-            // Run after DOM is ready
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', hideNav);
-            } else {
-                hideNav();
-            }
-            // Run after short delays to catch late-rendered elements
-            setTimeout(hideNav, 0);
-            setTimeout(hideNav, 50);
-            setTimeout(hideNav, 100);
-            setTimeout(hideNav, 300);
-            setTimeout(hideNav, 500);
-            // Use MutationObserver to catch dynamically added elements
-            if (typeof MutationObserver !== 'undefined') {
-                const observer = new MutationObserver(function(mutations) {
-                    hideNav();
-                });
-                if (document.body) {
-                    observer.observe(document.body, { 
-                        childList: true, 
-                        subtree: true,
-                        attributes: true,
-                        attributeFilter: ['data-testid']
-                    });
-                }
-            }
-        })();
-        </script>
-        """,
-        unsafe_allow_html=True,
-    )
+    """
+    NOTE: This function is deprecated when using st.navigation.
+    st.navigation automatically creates its own navigation sidebar.
+    We don't need to hide anything - st.navigation handles it.
+    """
+    # Do nothing - st.navigation creates its own navigation
+    pass
 
 
 def hide_sidebar_nav_immediately() -> None:
-    """Call this function at the very top of each page, before any other Streamlit calls"""
-    # Always call to ensure sidebar is hidden on every rerun
-    _hide_default_sidebar_nav()
+    """
+    NOTE: Deprecated when using st.navigation.
+    st.navigation automatically creates its own navigation sidebar.
+    No need to hide anything.
+    """
+    # Do nothing - st.navigation handles navigation automatically
+    pass
 
 
 def _render_user_sidebar_nav() -> None:
-    st.sidebar.markdown("### Navigation")
-    st.sidebar.page_link("pages/3_Home.py", label="Home")
-    st.sidebar.page_link("pages/1_History.py", label="History")
-    st.sidebar.page_link("pages/4_Attendance_Requests.py", label="Attendance Requests")
-    st.sidebar.page_link("pages/2_Team_Stats.py", label="Team Stats")
+    # Navigation is handled automatically by st.navigation() in app.py
+    # No need to manually render navigation links
+    pass
 
 
 def _render_admin_sidebar_nav() -> None:
-    st.sidebar.markdown("### Navigation")
-    st.sidebar.page_link("pages/7_Project_Resource_Allocation.py", label="Project Resource Allocation")
-    st.sidebar.page_link("pages/user_productivity_dashboard.py", label="User Productivity")
-    st.sidebar.page_link("pages/project_productivity_dashboard.py", label="Project Productivity")
-    st.sidebar.page_link("pages/05_Reports_Center.py", label="Reports Center")
-    st.sidebar.page_link("pages/2_Admin_Projects.py", label="Admin Projects")
-    st.sidebar.page_link("pages/3_Admin.py", label="Admin Panel")
-    st.sidebar.page_link("pages/5_Approvals.py", label="Approvals")
-    st.sidebar.page_link("pages/6_Attendance_Approvals.py", label="Attendance Approvals")
+    # Navigation is handled automatically by st.navigation() in app.py
+    # No need to manually render navigation links
+    pass
 
 
 def setup_role_access(current_file: str) -> None:
+    # Check authentication first - redirect to login if not authenticated
+    require_auth()
+    
     # Hide default sidebar navigation IMMEDIATELY, before any role checks
     # This ensures the default nav is hidden even if role check has latency
     hide_sidebar_nav_immediately()

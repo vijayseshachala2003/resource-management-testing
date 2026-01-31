@@ -88,7 +88,7 @@ def role_drilldown(
             "email": r.email,
             "role": r.role,
 
-            "attendance_status": r.attendance_status or "UNKNOWN",
+            "attendance_status": r.attendance_status or "ABSENT",
             "minutes_worked": r.minutes_worked or 0,
 
             "first_in": r.first_clock_in_at,

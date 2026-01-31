@@ -2,37 +2,60 @@ import streamlit as st
 import requests
 import time
 from datetime import datetime, date
-from role_guard import get_user_role
+from role_guard import setup_role_access
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="My Dashboard", layout="wide")
-
-# Basic role check (navigation already filters, but this is extra security)
-role = get_user_role()
-if not role or role not in ["USER", "ADMIN", "MANAGER"]:
-    st.error("Access denied. Please log in.")
-    st.stop()
+st.set_page_config(page_title="Home", layout="wide")
+setup_role_access(__file__)
 API_BASE_URL = "http://127.0.0.1:8000"
 
 # --- CUSTOM CSS FOR DARK MODE UI ---
 st.markdown("""
     <style>
-    /* Card Style for Dark Mode */
     .status-card {
-        text-align: center;
+        text-align: left;
         padding: 20px;
-        background-color: rgba(255, 255, 255, 0.05); /* Transparent White */
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 10px;
+        background-color: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
         margin-bottom: 20px;
     }
-    .status-text {
-        font-size: 18px;
-        margin-top: 10px;
-        color: #e0e0e0;
+    .status-title {
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #cbd5e1;
+        margin: 0 0 6px 0;
     }
-    .highlight-green { color: #00cc66; font-weight: bold; }
-    .highlight-red { color: #ff4b4b; font-weight: bold; }
+    .status-value {
+        font-size: 22px;
+        font-weight: 600;
+        color: #f8fafc;
+        margin: 0 0 6px 0;
+    }
+    .status-text {
+        font-size: 14px;
+        color: #cbd5e1;
+        margin: 0;
+    }
+    .badge {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+    }
+    .badge-success {
+        background: rgba(16, 185, 129, 0.15);
+        color: #10b981;
+        border: 1px solid rgba(16, 185, 129, 0.35);
+    }
+    .badge-danger {
+        background: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
+        border: 1px solid rgba(239, 68, 68, 0.35);
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -60,7 +83,7 @@ def api_request(method, endpoint, token=None, json=None, params=None):
 def authenticated_request(method, endpoint, data=None, params=None):
     token = st.session_state.get("token")
     if not token:
-        st.error("🔒 You are not logged in.")
+        st.error("You are not logged in.")
         st.stop()
     return api_request(method, endpoint, token=token, json=data, params=params)
 
@@ -140,10 +163,10 @@ if user:
     elif hasattr(user, "email"):
         user_name = user.email
 
-st.markdown(f"# 🚀 Hi, {user_name}!")
+st.markdown(f"# Welcome, {user_name}")
 current_time_str = datetime.now().strftime("%H:%M:%S")
-st.markdown(f"## 🕒 {current_time_str}")
-st.markdown("---")
+st.caption(f"Current time: {current_time_str}")
+st.divider()
 
 
 # --- 2. CHECK STATUS (Persistence) ---
@@ -155,33 +178,39 @@ with st.container(border=True):
 
     # --- LEFT COLUMN: STATUS CARD ---
     with col_left:
-        st.subheader("⏱️ Current Status")
+        st.subheader("Current Status")
         
         if current_session:
-            # ACTIVE STATE (Red)
+            # ACTIVE STATE
             _, display_time = split_datetime(current_session.get("clock_in_at"))
             
             st.markdown(f"""
-                <div class="status-card" style="border-left: 5px solid #ff4b4b;">
-                    <h2 class="highlight-red">🔴 CLOCKED IN</h2>
+                <div class="status-card">
+                    <p class="status-title">Status</p>
+                    <div class="status-value">
+                        <span class="badge badge-danger">Clocked in</span>
+                    </div>
                     <p class="status-text">Started at: <b>{display_time}</b></p>
                 </div>
             """, unsafe_allow_html=True)
             
-            st.info(f"🔨 Working on: **{current_session.get('project_name', 'Unknown')}**")
+            st.caption(f"Current project: {current_session.get('project_name', 'Unknown')}")
             
         else:
-            # INACTIVE STATE (Green)
+            # INACTIVE STATE
             st.markdown(f"""
-                <div class="status-card" style="border-left: 5px solid #00cc66;">
-                    <h2 class="highlight-green">🟢 READY</h2>
+                <div class="status-card">
+                    <p class="status-title">Status</p>
+                    <div class="status-value">
+                        <span class="badge badge-success">Ready</span>
+                    </div>
                     <p class="status-text">You are not working currently.</p>
                 </div>
             """, unsafe_allow_html=True)
 
     # --- RIGHT COLUMN: CONTROLS ---
     with col_right:
-        st.subheader("📋 Assignment Controls")
+        st.subheader("Assignment Controls")
         
         # Fetch Projects from Admin API (reused)
         assignments = authenticated_request("GET", "/admin/projects/") or []
@@ -235,15 +264,15 @@ with st.container(border=True):
                 disabled=disabled_flag,
             )
 
-        st.write("") # Spacer
+        st.write("")  # Spacer
         
         # Big Action Button
         if current_session:
-            if st.button("🛑 STOP SESSION & CLOCK OUT", type="primary", use_container_width=True):
+            if st.button("Stop session and clock out", type="primary", use_container_width=True):
                 st.session_state['show_clockout_popup'] = True
                 st.rerun()
         else:
-            if st.button("🚀 START WORK SESSION", type="primary", use_container_width=True):
+            if st.button("Start work session", type="primary", use_container_width=True):
                 if selected_proj_name:
                     proj_id = project_map[selected_proj_name]['id']
                     clock_in_at = datetime.now().isoformat()
@@ -253,14 +282,13 @@ with st.container(border=True):
                         "clock_in_at": clock_in_at,
                     })
                     if resp:
-                        st.balloons()
                         time.sleep(1)
                         st.rerun()
                 else:
-                    st.warning("⚠️ Please select a project first.")
+                    st.warning("Please select a project first.")
 
 # --- 3B. TODAY'S CLOCK IN / OUT DETAILS ---
-st.subheader("🗓️ Today's Sessions")
+st.subheader("Today's Sessions")
 today_str = date.today().isoformat()
 today_sessions = authenticated_request(
     "GET",
@@ -306,7 +334,7 @@ else:
             )
 
 # --- 4. POPUP: CLOCK OUT FORM ---
-@st.dialog("📝 Submit Timesheet")
+@st.dialog("Submit timesheet")
 def clock_out_dialog():
     c_pop1, c_pop2 = st.columns([1, 2])
 
@@ -325,19 +353,19 @@ def clock_out_dialog():
     c_confirm, c_cancel = st.columns(2)
 
     with c_confirm:
-        if st.button("✅ Confirm Submission", use_container_width=True, type="primary"):
+        if st.button("Confirm submission", use_container_width=True, type="primary"):
             resp = authenticated_request("PUT", "/time/clock-out", data={
                 "tasks_completed": tasks,
                 "notes": notes,
             })
             if resp:
-                st.success("✅ Saved! Great work today.")
+                st.success("Saved. Great work today.")
                 st.session_state['show_clockout_popup'] = False
                 time.sleep(1.5)
                 st.rerun()
 
     with c_cancel:
-        if st.button("❌ Cancel", use_container_width=True):
+        if st.button("Cancel", use_container_width=True):
             st.session_state['show_clockout_popup'] = False
             st.rerun()
 

@@ -6,7 +6,7 @@ from datetime import date, datetime
 from role_guard import get_user_role
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Approvals Inbox", layout="wide")
+st.set_page_config(page_title="Timesheet Approvals", layout="wide")
 
 # Basic role check
 role = get_user_role()
@@ -68,7 +68,7 @@ def bulk_approve(history_ids, action, notes=""):
     return success_count, failed_count
 
 # --- TITLE ---
-st.title("📋 Inbox: Pending Approvals")
+st.title("📋 Timesheet Approvals")
 st.markdown("Verify and approve team timesheets. Only project managers and admins can see approvals for their projects.")
 st.markdown("---")
 

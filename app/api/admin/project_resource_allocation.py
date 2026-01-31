@@ -72,7 +72,8 @@ def project_resource_allocation(
         query = query.filter(ProjectMember.is_active.is_(True))
 
     if only_pm_apm:
-        query = query.filter(User.role.in_(["PM", "APM"]))
+        # PM and APM are work roles, not user roles - filter by ProjectMember.work_role
+        query = query.filter(ProjectMember.work_role.in_(["PM", "APM"]))
 
     rows = query.all()
 
@@ -82,22 +83,22 @@ def project_resource_allocation(
         result.append(
             {
                 "user_id": user.id,
-        "name": user.name,
-        "email": user.email,
+                "name": user.name,
+                "email": user.email,
 
-        # ✅ DESIGNATION (system role)
-        "designation": user.role.value if user.role else None,
+                # ✅ DESIGNATION (system role)
+                "designation": user.role.value if user.role else None,
 
-        # ✅ WORK ROLE (project role)
-        "work_role": pm.work_role,
+                # ✅ WORK ROLE (project role)
+                "work_role": pm.work_role,
 
-        "reporting_manager": manager.name if manager else None,
-        "shift": shift.name if shift else None,
+                "reporting_manager": manager.name if manager else None,
+                "shift": shift.name if shift else None,
 
-        "attendance_status": attendance.status if attendance else "UNKNOWN",
-        "first_clock_in": attendance.first_clock_in_at if attendance else None,
-        "last_clock_out": attendance.last_clock_out_at if attendance else None,
-        "minutes_worked": attendance.minutes_worked if attendance else 0,
+                "attendance_status": attendance.status if attendance else "ABSENT",
+                "first_clock_in": attendance.first_clock_in_at if attendance else None,
+                "last_clock_out": attendance.last_clock_out_at if attendance else None,
+                "minutes_worked": attendance.minutes_worked if attendance else 0,
             }
         )
 

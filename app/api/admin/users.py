@@ -253,7 +253,7 @@ def search_with_filters(
                     func.coalesce(project_count_sq.c.project_count, 0).label(
                         "allocated_projects"
                     ),
-                    func.coalesce(attendance_sq.c.status, "UNKNOWN").label(
+                    func.coalesce(attendance_sq.c.status, "ABSENT").label(
                         "today_status"
                     ),
                 )
@@ -280,7 +280,7 @@ def search_with_filters(
                     func.coalesce(project_count_sq.c.project_count, 0).label(
                         "allocated_projects"
                     ),
-                    func.coalesce(attendance_sq.c.status, "UNKNOWN").label(
+                    func.coalesce(attendance_sq.c.status, "ABSENT").label(
                         "today_status"
                     ),
                 )
@@ -314,7 +314,7 @@ def search_with_filters(
 
         if status is not None:
             query = query.filter(
-                func.coalesce(attendance_sq.c.status, "UNKNOWN") == status
+                func.coalesce(attendance_sq.c.status, "ABSENT") == status
             )
 
         # Get total count before ordering (more efficient)
@@ -345,7 +345,7 @@ def search_with_filters(
                     "shift_name": r.shift_name if r.shift_name else None,
                     "rpm_user_id": r.reporting_manager_id,
                     "allocated_projects": r.allocated_projects if r.allocated_projects else 0,
-                    "today_status": r.today_status if r.today_status else "UNKNOWN",
+                    "today_status": r.today_status if r.today_status else "ABSENT",
                 })
             except Exception as item_error:
                 # Log error for individual item but continue with others
