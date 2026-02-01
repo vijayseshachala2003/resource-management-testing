@@ -7,7 +7,7 @@ from app.models.user import User, UserRole
 from app.models.project_members import ProjectMember
 from app.models.attendance_daily import AttendanceDaily
 from app.core.dependencies import get_current_user
-from app.schemas.user import UserBatchUpdateRequest, UserCreate, UserResponse, UserUpdate, UserSystemUpdate, UsersAdminSearchFilters, UserBatchUpdate
+from app.schemas.user import UserBatchUpdateRequest, UserCreate, UserResponse, UserUpdate, UserQualityUpdate, UserSystemUpdate, UsersAdminSearchFilters, UserBatchUpdate
 from typing import List, Optional
 from uuid import UUID
 from datetime import date
@@ -39,15 +39,7 @@ def list_users(
     offset: int = 0,
     db: Session = Depends(get_db),
 ):
-    # Log immediately so we know the endpoint was called
-    print(f"[USERS API] ===== list_users endpoint called =====")
-    print(f"[USERS API] Params: limit={limit}, offset={offset}, name={name}, email={email}, roles={roles}, is_active={is_active}")
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info(f"list_users endpoint called - limit={limit}, offset={offset}")
-    
     try:
-        
         query = db.query(User)
 
         if name:
@@ -73,59 +65,10 @@ def list_users(
             .all()
         )
         
-        print(f"[USERS API] Found {len(users)} users from database")
-        logger.info(f"Found {len(users)} users from database")
-        
-        # Convert users to response format, handling weekoffs conversion
-        result = []
-        for user in users:
-            try:
-                # Handle weekoffs conversion
-                weekoffs_list = None
-                if user.weekoffs:
-                    from app.schemas.user import WeekoffDays
-                    try:
-                        weekoffs_list = [WeekoffDays(w.value) if hasattr(w, 'value') else WeekoffDays(str(w)) for w in user.weekoffs]
-                    except (ValueError, TypeError) as we:
-                        logger.warning(f"Error converting weekoffs for user {user.id}: {str(we)}")
-                        weekoffs_list = None
-                
-                # Create response - UserResponse expects UserRole enum, not string
-                # The enum from database should work directly with Pydantic
-                user_data = {
-                    "id": user.id,
-                    "email": user.email,
-                    "name": user.name,
-                    "role": user.role,  # Keep as enum - Pydantic will serialize it
-                    "is_active": user.is_active,
-                    "work_role": user.work_role,
-                    "doj": user.doj,
-                    "default_shift_id": user.default_shift_id,
-                    "rpm_user_id": user.rpm_user_id,
-                    "soul_id": user.soul_id,
-                    "weekoffs": weekoffs_list,
-                    "created_at": user.created_at,
-                    "updated_at": user.updated_at,
-                }
-                result.append(UserResponse(**user_data))
-            except Exception as user_err:
-                # If one user fails, log and continue with others
-                logger.error(f"Error serializing user {user.id}: {str(user_err)}", exc_info=True)
-                continue
-        
-        print(f"[USERS API] Successfully serialized {len(result)} users")
-        logger.info(f"Successfully serialized {len(result)} users")
-        return result
+        return users
     except Exception as e:
         import traceback
-        import logging
-        error_trace = traceback.format_exc()
-        logger = logging.getLogger(__name__)
-        logger.error(f"Error in list_users endpoint: {str(e)}", exc_info=True)
-        # Print to console for immediate visibility
-        print(f"[USERS API ERROR] {str(e)}")
-        print(f"[USERS API ERROR TRACEBACK]\n{error_trace}")
-        error_detail = f"Error fetching users: {str(e)}\n{error_trace}"
+        error_detail = f"Error fetching users: {str(e)}\n{traceback.format_exc()}"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=error_detail
@@ -184,209 +127,124 @@ def search_with_filters(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user)
 ):
-    try:
-        selected_date_str = payload.date
-        email = payload.email
-        name = payload.name
-        allocated = payload.allocated
-        work_role = payload.work_role
-        is_active = payload.is_active
-        status = payload.status
+    date = payload.date
+    email = payload.email
+    name = payload.name
+    allocated = payload.allocated
+    work_role = payload.work_role
+    is_active = payload.is_active
+    status = payload.status
 
-        # Use selected_date if provided, otherwise use today
-        if selected_date_str:
-            from datetime import datetime
-            try:
-                today = datetime.strptime(selected_date_str, "%Y-%m-%d").date() if isinstance(selected_date_str, str) else selected_date_str
-            except ValueError as e:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid date format: {selected_date_str}. Expected format: YYYY-MM-DD"
-                )
-        else:
-            today = date.today()
-        Manager = aliased(User)
+    today = date
+    Manager = aliased(User)
 
-        project_count_sq = (
-            db.query(
-                ProjectMember.user_id.label("user_id"),
-                func.count(ProjectMember.id).label("project_count"),
+    project_count_sq = (
+        db.query(
+            ProjectMember.user_id.label("user_id"),
+            func.count(ProjectMember.id).label("project_count"),
 
-            )
-            .group_by(ProjectMember.user_id)
-            .subquery()
         )
+        .group_by(ProjectMember.user_id)
+        .subquery()
+    )
 
-        attendance_sq = (
-            db.query(
-                AttendanceDaily.user_id.label("user_id"),
-                func.max(AttendanceDaily.status).label("status"),
-            )
-            .filter(AttendanceDaily.attendance_date == today)
-            .group_by(AttendanceDaily.user_id)
-            .subquery()
+    attendance_sq = (
+        db.query(
+            AttendanceDaily.user_id.label("user_id"),
+            func.max(AttendanceDaily.status).label("status"),
         )
+        .filter(AttendanceDaily.attendance_date == today)
+        .group_by(AttendanceDaily.user_id)
+        .subquery()
+    )
 
-        # Build query - use outerjoin for Shift to handle missing shifts gracefully
-        # Try to build query with Shift join, but handle if Shift table doesn't exist
-        try:
-            # Test if Shift table is accessible
-            _ = db.query(Shift).limit(1).first()
-            shift_available = True
-        except Exception as shift_check_error:
-            print(f"[WARNING] Shift table check failed: {str(shift_check_error)}")
-            shift_available = False
-        
-        if shift_available:
-            query = (
-                db.query(
-                    User.id,
-                    User.name,
-                    User.email,
-                    User.role,
-                    User.work_role,
-                    User.is_active,
-                    User.default_shift_id.label("shift_id"),
-                    Shift.name.label("shift_name"),
-                    Manager.name.label("reporting_manager"),
-                    Manager.id.label("reporting_manager_id"),
-                    func.coalesce(project_count_sq.c.project_count, 0).label(
-                        "allocated_projects"
-                    ),
-                    func.coalesce(attendance_sq.c.status, "ABSENT").label(
-                        "today_status"
-                    ),
-                )
-                .outerjoin(Manager, Manager.id == User.rpm_user_id)
-                .outerjoin(project_count_sq, project_count_sq.c.user_id == User.id)
-                .outerjoin(attendance_sq, attendance_sq.c.user_id == User.id)
-                .outerjoin(Shift, Shift.id == User.default_shift_id)
-            )
-        else:
-            # Build query without Shift join if table doesn't exist
-            from sqlalchemy import literal
-            query = (
-                db.query(
-                    User.id,
-                    User.name,
-                    User.email,
-                    User.role,
-                    User.work_role,
-                    User.is_active,
-                    User.default_shift_id.label("shift_id"),
-                    literal(None).label("shift_name"),  # Use literal None instead of Shift.name
-                    Manager.name.label("reporting_manager"),
-                    Manager.id.label("reporting_manager_id"),
-                    func.coalesce(project_count_sq.c.project_count, 0).label(
-                        "allocated_projects"
-                    ),
-                    func.coalesce(attendance_sq.c.status, "ABSENT").label(
-                        "today_status"
-                    ),
-                )
-                .outerjoin(Manager, Manager.id == User.rpm_user_id)
-                .outerjoin(project_count_sq, project_count_sq.c.user_id == User.id)
-                .outerjoin(attendance_sq, attendance_sq.c.user_id == User.id)
-            ) 
+    query = (
+        db.query(
+            User.id,
+            User.name,
+            User.email,
+            User.role,
+            User.work_role,
+            User.is_active,
+            User.default_shift_id.label("shift_id"),
+            Shift.name.label("shift_name"),
+            Manager.name.label("reporting_manager"),
+            Manager.id.label("reporting_manager_id"),
+            # case(
+            #     (User.work_role == "CONTRACTOR", True),
+            #     else_=False
+            # ).label("is_contractor"),
+            func.coalesce(project_count_sq.c.project_count, 0).label(
+                "allocated_projects"
+            ),
+            func.coalesce(attendance_sq.c.status, "UNKNOWN").label(
+                "today_status"
+            ),
+        )
+        .outerjoin(Manager, Manager.id == User.rpm_user_id)
+        .outerjoin(project_count_sq, project_count_sq.c.user_id == User.id)
+        .outerjoin(attendance_sq, attendance_sq.c.user_id == User.id)
+        .outerjoin(Shift, Shift.id == User.default_shift_id)
+    ) 
 
-        # ---- Filters ----
-        if email:
-            query = query.filter(User.email.ilike(f"%{email}%"))
+    # ---- Filters ----
+    if email:
+        query = query.filter(User.email.ilike(f"%{email}%"))
 
-        if name:
-            query = query.filter(User.name.ilike(f"%{name}%"))
+    if name:
+        query = query.filter(User.name.ilike(f"%{name}%"))
 
-        if work_role:
-            query = query.filter(User.work_role == work_role)
+    if work_role:
+        query = query.filter(User.work_role == work_role)
 
-        if is_active is not None:
-            query = query.filter(User.is_active == is_active)
+    if is_active is not None:
+        query = query.filter(User.is_active == is_active)
 
-        if allocated is not None:
-            if allocated:
-                query = query.filter(
-                    func.coalesce(project_count_sq.c.project_count, 0) > 0
-                )
-            else:
-                query = query.filter(
-                    func.coalesce(project_count_sq.c.project_count, 0) == 0
-                )
-
-        if status is not None:
+    if allocated is not None:
+        if allocated:
             query = query.filter(
-                func.coalesce(attendance_sq.c.status, "ABSENT") == status
+                func.coalesce(project_count_sq.c.project_count, 0) > 0
+            )
+        else:
+            query = query.filter(
+                func.coalesce(project_count_sq.c.project_count, 0) == 0
             )
 
-        # Get total count before ordering (more efficient)
-        total = query.count()
-        
-        # Apply ordering and get results
-        results = (
-            query
-            .order_by(User.name.asc())
-            .all()
+    if status is not None:
+        query = query.filter(
+            func.coalesce(attendance_sq.c.status, "UNKNOWN") == status
         )
 
-        # ---- Response ----
-        # Convert role enum to string for JSON serialization
-        items = []
-        for r in results:
-            try:
-                # Handle role enum conversion
-                role_value = r.role.value if hasattr(r.role, 'value') else str(r.role)
-                items.append({
-                    "id": r.id,
-                    "name": r.name,
-                    "email": r.email,
-                    "role": role_value,
-                    "work_role": r.work_role,
-                    "is_active": r.is_active,
-                    "shift_id": r.shift_id,
-                    "shift_name": r.shift_name if r.shift_name else None,
-                    "rpm_user_id": r.reporting_manager_id,
-                    "allocated_projects": r.allocated_projects if r.allocated_projects else 0,
-                    "today_status": r.today_status if r.today_status else "ABSENT",
-                })
-            except Exception as item_error:
-                # Log error for individual item but continue with others
-                print(f"[WARNING] Error processing user item: {str(item_error)}")
-                continue
-        
-        return {
-            "items": items,
-            "meta": {
-                "total": total,
-            }
+
+    results = query.all()
+    total = query.count()
+    results = (
+        query
+        .order_by(User.name.asc())
+        .all()
+    )
+
+    # ---- Response ----
+    return {
+        "items": [{
+            "id": r.id,
+            "name": r.name,
+            "email": r.email,
+            "role": r.role,
+            "work_role": r.work_role,
+            "is_active": r.is_active,
+            "shift_id": r.shift_id,
+            "shift_name": r.shift_name,
+            "rpm_user_id": r.reporting_manager_id,
+            "allocated_projects": r.allocated_projects,
+            "today_status": r.today_status,
         }
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-        import logging
-        logger = logging.getLogger(__name__)
-        error_trace = traceback.format_exc()
-        error_type = type(e).__name__
-        error_msg = str(e)
-        
-        # Log detailed error information
-        logger.error(f"Error in search_with_filters: {error_type}: {error_msg}", exc_info=True)
-        print(f"[USERS API ERROR] search_with_filters: {error_type}: {error_msg}")
-        print(f"[USERS API ERROR TRACEBACK]\n{error_trace}")
-        
-        # Provide more helpful error message based on error type
-        if "relation" in error_msg.lower() or "does not exist" in error_msg.lower():
-            detail_msg = f"Database table error: {error_msg}. Please check if all required tables exist."
-        elif "column" in error_msg.lower() and "does not exist" in error_msg.lower():
-            detail_msg = f"Database column error: {error_msg}. Please check database schema."
-        elif "shift" in error_msg.lower():
-            detail_msg = f"Shift table error: {error_msg}. The shifts table may not exist or have issues."
-        else:
-            detail_msg = f"Error fetching users: {error_type}: {error_msg}"
-        
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=detail_msg
-        ) 
+        for r in results
+        ],
+        "meta": {
+            "total": total,
+        }
+    } 
 
 @router.post("/", response_model=UserResponse)
 def create_user(payload: UserCreate, db: Session = Depends(get_db)):
@@ -509,7 +367,7 @@ def create_supabase_account_for_user(
 
 
 from fastapi import HTTPException, APIRouter, Depends, status
-from app.schemas.user import UserUpdate
+from app.schemas.user import UserQualityUpdate, UserUpdate
 
 @router.put("/{user_id}", response_model=UserResponse)
 def update_user(
@@ -529,6 +387,27 @@ def update_user(
 
     db.commit()
     db.refresh(user)
+    return user
+
+@router.patch("/{user_id}/quality-rating", response_model=UserResponse)
+def update_quality_rating(
+    user_id: UUID,
+    payload: UserQualityUpdate,
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == user_id).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    user.quality_rating = payload.quality_rating
+
+    db.commit()
+    db.refresh(user)
+
     return user
 
 from app.schemas.user import UserSystemUpdate

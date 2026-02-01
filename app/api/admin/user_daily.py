@@ -83,6 +83,8 @@ class QualityRatingResponse(BaseModel):
     metric_date: date
     quality_rating: Optional[str] = None  # "GOOD", "AVERAGE", "BAD", or None if not assessed
     quality_score: Optional[float] = None  # Numeric score (0-10) or None
+    accuracy: Optional[float] = None  # Accuracy percentage (0-100) or None
+    critical_rate: Optional[float] = None  # Critical rate percentage (0-100) or None
     source: Optional[str] = None  # "MANUAL" or "AUTO_CALC"
     assessed_by: Optional[UUID] = None  # User who assessed the quality
     notes: Optional[str] = None  # Assessment notes
@@ -148,6 +150,8 @@ def get_quality_ratings(
                 "metric_date": target_date,
                 "quality_rating": rating,
                 "quality_score": float(quality_record.quality_score) if quality_record.quality_score else None,
+                "accuracy": float(quality_record.accuracy) if quality_record.accuracy else None,
+                "critical_rate": float(quality_record.critical_rate) if quality_record.critical_rate else None,
                 "source": quality_record.source,
                 "assessed_by": quality_record.assessed_by_user_id,
                 "notes": quality_record.notes
@@ -192,6 +196,8 @@ def get_quality_ratings(
         if quality_record:
             rating = quality_record.rating.value if hasattr(quality_record.rating, 'value') else str(quality_record.rating)
             quality_score = float(quality_record.quality_score) if quality_record.quality_score else None
+            accuracy = float(quality_record.accuracy) if quality_record.accuracy else None
+            critical_rate = float(quality_record.critical_rate) if quality_record.critical_rate else None
             source = quality_record.source
             assessed_by = quality_record.assessed_by_user_id
             notes = quality_record.notes
@@ -199,6 +205,8 @@ def get_quality_ratings(
             # No quality assessment exists - return None values
             rating = None
             quality_score = None
+            accuracy = None
+            critical_rate = None
             source = None
             assessed_by = None
             notes = None
@@ -210,6 +218,8 @@ def get_quality_ratings(
             "metric_date": target_date,
             "quality_rating": rating,
             "quality_score": quality_score,
+            "accuracy": accuracy,
+            "critical_rate": critical_rate,
             "source": source,
             "assessed_by": assessed_by,
             "notes": notes
@@ -230,6 +240,8 @@ class QualityAssessmentCreate(BaseModel):
     metric_date: date
     rating: str  # "GOOD", "AVERAGE", "BAD"
     quality_score: Optional[float] = None  # 0-10
+    accuracy: Optional[float] = None  # Accuracy percentage (0-100)
+    critical_rate: Optional[float] = None  # Critical rate percentage (0-100)
     notes: Optional[str] = None
     work_role: Optional[str] = None  # Will be fetched from project_members if not provided
 
@@ -239,6 +251,8 @@ class QualityAssessmentResponse(BaseModel):
     project_id: UUID
     rating: str
     quality_score: Optional[float]
+    accuracy: Optional[float]  # Accuracy percentage (0-100)
+    critical_rate: Optional[float]  # Critical rate percentage (0-100)
     notes: Optional[str]
     source: str
     assessed_by_user_id: Optional[UUID]
@@ -292,6 +306,22 @@ def create_quality_assessment(
                 detail="Quality score must be between 0 and 10"
             )
     
+    # Validate accuracy if provided
+    if payload.accuracy is not None:
+        if payload.accuracy < 0 or payload.accuracy > 100:
+            raise HTTPException(
+                status_code=400,
+                detail="Accuracy must be between 0 and 100"
+            )
+    
+    # Validate critical_rate if provided
+    if payload.critical_rate is not None:
+        if payload.critical_rate < 0 or payload.critical_rate > 100:
+            raise HTTPException(
+                status_code=400,
+                detail="Critical rate must be between 0 and 100"
+            )
+    
     # Find existing current quality record
     current_quality = db.query(UserQuality).filter(
         UserQuality.user_id == payload.user_id,
@@ -315,6 +345,8 @@ def create_quality_assessment(
         work_role=work_role,
         rating=rating_enum,
         quality_score=payload.quality_score,
+        accuracy=payload.accuracy,
+        critical_rate=payload.critical_rate,
         notes=payload.notes,
         source="MANUAL",
         assessed_by_user_id=assessed_by,
@@ -335,6 +367,8 @@ def create_quality_assessment(
         project_id=new_quality.project_id,
         rating=new_quality.rating.value,
         quality_score=float(new_quality.quality_score) if new_quality.quality_score else None,
+        accuracy=float(new_quality.accuracy) if new_quality.accuracy else None,
+        critical_rate=float(new_quality.critical_rate) if new_quality.critical_rate else None,
         notes=new_quality.notes,
         source=new_quality.source,
         assessed_by_user_id=new_quality.assessed_by_user_id,

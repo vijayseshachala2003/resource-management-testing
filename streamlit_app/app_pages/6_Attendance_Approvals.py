@@ -2,16 +2,11 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime
-from role_guard import get_user_role
+from role_guard import setup_role_access
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Leave/WFH Request Approvals", layout="wide")
-
-# Basic role check
-role = get_user_role()
-if not role or role not in ["ADMIN", "MANAGER"]:
-    st.error("Access denied. Admin or Manager role required.")
-    st.stop()
+st.set_page_config(page_title="Attendance Request Approvals", layout="wide")
+setup_role_access(__file__)
 API_BASE_URL = "http://127.0.0.1:8000"
 
 # --- HELPER FUNCTIONS ---
@@ -41,7 +36,7 @@ def authenticated_request(method, endpoint, data=None, params=None):
 
 
 def get_pending_requests(request_type=None):
-    """Fetch pending leave/WFH requests that need approval"""
+    """Fetch pending attendance requests that need approval"""
     params = {"status": "PENDING"}
     if request_type and request_type != "All":
         params["request_type"] = request_type
@@ -49,7 +44,7 @@ def get_pending_requests(request_type=None):
 
 
 def get_all_requests(status=None, request_type=None):
-    """Fetch all leave/WFH requests with optional filters"""
+    """Fetch all attendance requests with optional filters"""
     params = {}
     if status and status != "All":
         params["status"] = status
@@ -98,7 +93,7 @@ def update_approval(approval_id, decision, comment):
 
 
 # --- PAGE HEADER ---
-st.title("📋 Leave/WFH Request Approvals")
+st.title("📋 Attendance Request Approvals")
 
 # --- LOAD FILTERS ---
 projects = authenticated_request("GET", "/admin/projects") or []
@@ -128,7 +123,7 @@ tab1, tab2, tab3 = st.tabs(["📥 Pending Requests", "📜 Approval History", "�
 # TAB 1: PENDING REQUESTS
 # =====================
 with tab1:
-    st.subheader("Pending Leave/WFH Requests")
+    st.subheader("Pending Attendance Requests")
     
     # Filters Row
     f_col1, f_col2, f_col3, f_col4 = st.columns([1.5, 1.5, 1, 1])
@@ -255,6 +250,14 @@ with tab2:
         history = [h for h in history if h.get('decided_at', '') <= str(h_date_to) + " 23:59:59"]
     all_requests = get_all_requests()
     
+    # Fetch all users to create approver lookup
+    all_users = authenticated_request("GET", "/admin/users/", params={"limit": 1000}) or []
+    approver_lookup = {}
+    for user in all_users:
+        user_id = user.get('id')
+        if user_id:
+            approver_lookup[str(user_id)] = user.get('name', 'Unknown')
+    
     if not history:
         st.info("No approval history found.")
     else:
@@ -266,7 +269,9 @@ with tab2:
                     'user_name': req.get('user_name', 'Unknown'),
                     'user_id': req.get('user_id'),
                     'request_type': req.get('request_type'),
-                    'reason': req.get('reason')
+                    'reason': req.get('reason'),
+                    'start_date': req.get('start_date', 'N/A'),
+                    'end_date': req.get('end_date', 'N/A')
                 }
         
         # Enrich history with request info
@@ -279,11 +284,20 @@ with tab2:
             if filter_req_type != "All" and req_info.get('request_type') != filter_req_type:
                 continue
             
+            # Get approver name
+            approver_user_id = h.get('approver_user_id')
+            approver_name = 'Unknown'
+            if approver_user_id:
+                approver_name = approver_lookup.get(str(approver_user_id), 'Unknown')
+            
             enriched_history.append({
                 'decision': h.get('decision'),
                 'user_name': req_info.get('user_name', 'Unknown'),
                 'user_id': str(req_info.get('user_id', 'N/A'))[:8] + '...',
                 'request_type': req_info.get('request_type', 'N/A'),
+                'start_date': req_info.get('start_date', 'N/A'),
+                'end_date': req_info.get('end_date', 'N/A'),
+                'approver_name': approver_name,
                 'comment': h.get('comment'),
                 'decided_at': h.get('decided_at', '')[:19],  # Truncate timestamp
                 'approval_id': str(h.get('id', ''))[:8] + '...',
@@ -295,7 +309,7 @@ with tab2:
         
         if enriched_history:
             df = pd.DataFrame(enriched_history)
-            df.columns = ['Decision', 'Requester Name', 'User ID', 'Request Type', 'Comment', 'Decided At', 'Approval ID']
+            df.columns = ['Decision', 'Requester Name', 'User ID', 'Request Type', 'From Date', 'To Date', 'Approved By', 'Comment', 'Decided At', 'Approval ID']
             
             # Add status color
             def color_decision(val):

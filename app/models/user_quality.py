@@ -25,6 +25,8 @@ class UserQuality(Base):
     rating = Column(SqEnum(QualityRating), nullable=False)
     
     quality_score = Column(Numeric(5, 2), nullable=True)
+    accuracy = Column(Numeric(5, 2), nullable=True)  # Accuracy percentage (0-100)
+    critical_rate = Column(Numeric(5, 2), nullable=True)  # Critical rate percentage (0-100)
     notes = Column(Text, nullable=True)
     source = Column(String, nullable=False, default="MANUAL")
     
