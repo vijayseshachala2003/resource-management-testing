@@ -19,6 +19,7 @@ serve(async (req) => {
     end_date,
     requester_name,
     project_names,
+    cc,
   } = body;
   const projectLine = project_names
     ? `<p><strong>Projects:</strong> ${project_names}</p>`
@@ -69,6 +70,7 @@ serve(async (req) => {
     body: JSON.stringify({
       from: FROM_EMAIL,
       to: email,
+      ...(cc && Array.isArray(cc) && cc.length > 0 ? { cc } : {}),
       subject,
       html,
     }),
