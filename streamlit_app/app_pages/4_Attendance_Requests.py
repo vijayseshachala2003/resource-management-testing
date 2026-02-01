@@ -349,48 +349,47 @@ with col_left:
             key="req_type_selectbox"
         )
         
+        # Date Range (outside the form so the UI updates immediately)
+        col_a, col_b = st.columns(2)
+        with col_a:
+            start_date = st.date_input(
+                "Start Date",
+                value=st.session_state.get("start_date_input", date.today()),
+                min_value=date.today(),
+                key="start_date_input",
+            )
+        with col_b:
+            is_half_day = req_type == "HALF-DAY"
+            saved_end_date = st.session_state.get("end_date_input", start_date)
+            default_end_date = saved_end_date if saved_end_date and saved_end_date >= start_date else start_date
+            end_date = st.date_input(
+                "End Date",
+                value=default_end_date,
+                min_value=start_date,
+                disabled=is_half_day,
+                key="end_date_input",
+                help="Same as start date for HALF-DAY" if is_half_day else None,
+            )
+            if is_half_day:
+                end_date = start_date
+
+        # Days calculation for SICK_LEAVE and FULL-DAY types
+        if start_date and end_date:
+            if req_type in ["SICK_LEAVE", "FULL-DAY"]:
+                days = calc_days(start_date, end_date)
+                if days > 2:
+                    st.warning(f"⚠️ {days} days leave will be marked as **Non-Paid Leave**")
+                else:
+                    st.info(f"ℹ️ {days} day(s) - Paid Leave")
+            elif req_type == "HALF-DAY":
+                st.info("ℹ️ 0.5 day - Half Day Leave")
+
         # Use form to enable automatic clearing
         with st.form("attendance_request_form", clear_on_submit=True):
-            # Date Range (no default values)
-            col_a, col_b = st.columns(2)
-            with col_a:
-                start_date = st.date_input("Start Date", value=None, min_value=date.today())
-            with col_b:
-                # For HALF-DAY, end_date should be same as start_date
-                if req_type == "HALF-DAY":
-                    if start_date:
-                        end_date = start_date
-                        st.date_input("End Date", value=start_date, disabled=True)
-                    else:
-                        end_date = None
-                        st.date_input("End Date", value=None, disabled=True)
-                else:
-                    if start_date:
-                        end_date = st.date_input(
-                            "End Date",
-                            value=start_date,
-                            min_value=start_date,
-                            key="end_date_input",
-                        )
-                    else:
-                        end_date = None
-                        st.date_input("End Date", value=None, min_value=None)
-            
-            # Days calculation for SICK_LEAVE and FULL-DAY types
-            if start_date and end_date:
-                if req_type in ["SICK_LEAVE", "FULL-DAY"]:
-                    days = calc_days(start_date, end_date)
-                    if days > 2:
-                        st.warning(f"⚠️ {days} days leave will be marked as **Non-Paid Leave**")
-                    else:
-                        st.info(f"ℹ️ {days} day(s) - Paid Leave")
-                elif req_type == "HALF-DAY":
-                    st.info("ℹ️ 0.5 day - Half Day Leave")
-            
             # Time fields - only for SHIFT_CHANGE and REGULARIZATION
             start_time = None
             end_time = None
-            
+
             if req_type in ["SHIFT_CHANGE", "REGULARIZATION"]:
                 st.markdown("#### ⏰ Time Details")
                 time_col1, time_col2 = st.columns(2)
@@ -408,15 +407,15 @@ with col_left:
                         help="Select the end time for your shift/regularization",
                         key="end_time_input"
                     )
-                
+
                 # Validation: end time should be after start time
                 if start_time and end_time:
                     if end_time <= start_time:
                         st.warning("⚠️ End time should be after start time.")
-            
+
             # Reason
             reason = st.text_area("Reason", height=100, placeholder="Enter reason for request...")
-            
+
             # Submit Button
             submitted = st.form_submit_button("✉️ Submit Request", type="primary", use_container_width=True)
             
