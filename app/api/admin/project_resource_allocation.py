@@ -66,6 +66,8 @@ def project_resource_allocation(
         # ✅ FIX: shift comes from USER, not project_member
         .outerjoin(Shift, User.default_shift_id == Shift.id)
         .filter(ProjectMember.project_id == project_id_uuid)
+        # Removed date range filtering - show all active members regardless of assignment dates
+        # The target_date is still used for attendance data, but doesn't filter project members
     )
 
     if only_active:

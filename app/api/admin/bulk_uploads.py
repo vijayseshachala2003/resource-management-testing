@@ -364,6 +364,28 @@ async def bulk_upload_quality(
                     error_list.append(f"Line {line_no}: Invalid quality_score '{row['quality_score']}'")
                     continue
 
+            accuracy = None
+            if row.get("accuracy") and row["accuracy"].strip():
+                try:
+                    accuracy = float(row["accuracy"].strip())
+                    if accuracy < 0 or accuracy > 100:
+                        error_list.append(f"Line {line_no}: Accuracy must be between 0 and 100")
+                        continue
+                except ValueError:
+                    error_list.append(f"Line {line_no}: Invalid accuracy '{row['accuracy']}'")
+                    continue
+
+            critical_rate = None
+            if row.get("critical_rate") and row["critical_rate"].strip():
+                try:
+                    critical_rate = float(row["critical_rate"].strip())
+                    if critical_rate < 0 or critical_rate > 100:
+                        error_list.append(f"Line {line_no}: Critical rate must be between 0 and 100")
+                        continue
+                except ValueError:
+                    error_list.append(f"Line {line_no}: Invalid critical_rate '{row['critical_rate']}'")
+                    continue
+
             work_role = row.get("work_role", "").strip() or None
             if not work_role:
                 # Try to get from project_members
@@ -396,6 +418,8 @@ async def bulk_upload_quality(
                 work_role=work_role,
                 rating=rating,
                 quality_score=quality_score,
+                accuracy=accuracy,
+                critical_rate=critical_rate,
                 notes=notes,
                 source="MANUAL",
                 assessed_by_user_id=current_user.id,

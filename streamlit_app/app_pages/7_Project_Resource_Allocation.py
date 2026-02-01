@@ -463,6 +463,54 @@ def get_project_allocation_cached(project_id, target_date_str, only_active=True)
         print(f"[DEBUG] get_project_allocation_cached: project_id={project_id_str}, date={target_date_str}, API returned None")
     return result
 
+@st.cache_data(ttl=60, show_spinner="Loading user projects mapping...")
+def get_user_projects_mapping_cached(target_date_str):
+    """Cache user to projects mapping for 1 minute
+    Returns a dictionary mapping user_id (as string) to list of project names
+    
+    Args:
+        target_date_str: Date string in YYYY-MM-DD format
+    """
+    all_projects = get_all_projects_cached()
+    user_projects_map = {}
+    
+    # For each project, get allocation data and map users to project names
+    for project in all_projects:
+        project_id = project.get("id")
+        project_name = project.get("name", "Unknown Project")
+        
+        if not project_id:
+            continue
+        
+        # Get allocation data for this project
+        allocation_data = get_project_allocation_cached(project_id, target_date_str, only_active=True)
+        
+        if allocation_data and allocation_data.get("resources"):
+            for resource in allocation_data["resources"]:
+                user_id = str(resource.get("user_id", "")).strip()
+                if user_id and user_id != "None":
+                    # Store with multiple ID format variants for better matching
+                    if user_id not in user_projects_map:
+                        user_projects_map[user_id] = []
+                    if project_name not in user_projects_map[user_id]:
+                        user_projects_map[user_id].append(project_name)
+                    
+                    # Also store with lowercase and no-dash variants
+                    user_id_lower = user_id.lower()
+                    user_id_no_dashes = user_id.replace("-", "")
+                    if user_id_lower not in user_projects_map:
+                        user_projects_map[user_id_lower] = []
+                    if project_name not in user_projects_map[user_id_lower]:
+                        user_projects_map[user_id_lower].append(project_name)
+                    
+                    if user_id_no_dashes not in user_projects_map:
+                        user_projects_map[user_id_no_dashes] = []
+                    if project_name not in user_projects_map[user_id_no_dashes]:
+                        user_projects_map[user_id_no_dashes].append(project_name)
+    
+    print(f"[DEBUG] get_user_projects_mapping_cached: Created mapping for {len(set([k for k in user_projects_map.keys() if not k.islower() and '-' in k]))} unique users")
+    return user_projects_map
+
 
 # ---------------------------------------------------------
 # AUTH GUARD
@@ -569,7 +617,7 @@ with tab1:
                 f"*The page cannot function without a working API server.*")
         print(f"[DEBUG] No users_data returned. Primary API failed, fallback also returned empty.")
     
-    # Filter users with role='USER' - handle both string and enum role values
+    # Filter users with role='USER' or role='ADMIN' - handle both string and enum role values
     user_role_users = []
     for u in users_data:
         if not isinstance(u, dict):
@@ -585,16 +633,17 @@ with tab1:
         if len(user_role_users) < 3:
             print(f"[DEBUG] User {u.get('name', 'Unknown')}: role={role}, role_str={role_str}")
         
-        if role_str == "USER":
+        # Include both USER and ADMIN roles
+        if role_str == "USER" or role_str == "ADMIN":
             user_role_users.append(u)
     
     # Debug: Show filtering results
     if users_data and not user_role_users:
-        st.warning(f"⚠️ Found {len(users_data)} user(s) but none have role='USER'. Showing all users instead.")
-        # If no USER role users found, show all users (maybe they're ADMIN or have different role format)
+        st.warning(f"⚠️ Found {len(users_data)} user(s) but none have role='USER' or 'ADMIN'. Showing all users instead.")
+        # If no USER/ADMIN role users found, show all users
         user_role_users = users_data
         sample_roles = [str(u.get('role', 'N/A')) for u in users_data[:5]]
-        print(f"[DEBUG] No users with role='USER' found. Roles found: {sample_roles}")
+        print(f"[DEBUG] No users with role='USER' or 'ADMIN' found. Roles found: {sample_roles}")
     
     # Calculate counts
     total_users = len(user_role_users)
@@ -603,8 +652,7 @@ with tab1:
     
     allocated_users = [u for u in user_role_users if u.get("allocated_projects", 0) > 0]
     not_allocated_users = [u for u in user_role_users if u.get("allocated_projects", 0) == 0]
-    
-    # Fetch weekoffs for users to identify weekoff users
+        # Fetch weekoffs for users to identify weekoff users
     # Get today's weekday name (e.g., "MONDAY", "SUNDAY")
     today_weekday = selected_date.strftime("%A").upper()
     
@@ -769,14 +817,14 @@ with tab1:
     # Debug display in UI (collapsible)
     with st.expander("🔍 Debug Info (Click to see)", expanded=False):
         st.write(f"**Users Data:** {len(users_data) if users_data else 0} users loaded")
-        st.write(f"**User Role Users:** {len(user_role_users)} users after filtering")
+        st.write(f"**User Role Users (USER/ADMIN):** {len(user_role_users)} users after filtering")
         st.write(f"**Name Mapping:** {len(st.session_state.get('user_name_mapping_fallback', {}))} users in mapping")
         st.write(f"**Today's Weekday:** {today_weekday}")
         st.write(f"**Users with Weekoffs Mapped:** {len(user_weekoffs_map)} users")
         st.write(f"**Users with Today as Weekoff (in map):** {len(weekoff_user_ids_in_map)} users")
         st.write(f"**Weekoff Users Found (in role list):** {weekoff_count} users")
         if weekoff_users_not_in_role_list:
-            st.warning(f"⚠️ **{len(weekoff_users_not_in_role_list)} user(s) with weekoff today are NOT in the USER role list!** They may be ADMIN/MANAGER or filtered out.")
+            st.warning(f"⚠️ **{len(weekoff_users_not_in_role_list)} user(s) with weekoff today are NOT in the USER/ADMIN role list!** They may be MANAGER or filtered out.")
             missing_info = []
             for missing_user in weekoff_users_not_in_role_list[:5]:
                 missing_info.append(f"{missing_user['name']} (Role: {missing_user['role']}, Weekoffs: {missing_user['weekoffs']})")
@@ -793,8 +841,8 @@ with tab1:
     
     # SECTION 1: USER DASHBOARD
     st.markdown("## 👥 User Overview")
-    st.markdown("Dashboard showing Total users count with role 'USER', Count of present, absent, leave, allocated, not allocated, and weekoff")
-    st.caption("📊 **How Total Users are Calculated:** Total Users = All users in the system with role 'USER' (excluding ADMIN and MANAGER roles). Total Users = Present + Absent + Leave + Weekoff. WFH users are included in the Absent count. Weekoff users are determined by checking if today's weekday matches their configured weekoff days.")
+    st.markdown("Dashboard showing Total users count with role 'USER' or 'ADMIN', Count of present, absent, leave, allocated, not allocated, and weekoff")
+    st.caption("📊 **How Total Users are Calculated:** Total Users = All users in the system with role 'USER' or 'ADMIN' (excluding MANAGER role). Total Users = Present + Absent + Leave + Weekoff. WFH users are included in the Absent count. Weekoff users are determined by checking if today's weekday matches their configured weekoff days.")
     
     # Display clickable metrics
     col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
@@ -884,7 +932,7 @@ with tab1:
         len(st.session_state.user_list_data) > 0):
         
         list_title = {
-            "total": "All Users (Role: USER)",
+            "total": "All Users (Role: USER or ADMIN)",
             "present": "Present Users",
             "absent": "Absent Users",
             "leave": "Leave Users",
@@ -897,12 +945,114 @@ with tab1:
         if not st.session_state.show_project_list:
             @st.dialog(f"📋 {list_title}")
             def show_user_list_dialog():
-                df_users = pd.DataFrame(st.session_state.user_list_data)
-                if not df_users.empty:
-                    st.dataframe(df_users, use_container_width=True, height=400)
-                    export_csv(f"{list_title.replace(' ', '_')}_{selected_date}.csv", st.session_state.user_list_data)
+                # For allocated users, fetch and add project names
+                if st.session_state.show_user_list == "allocated":
+                    # Get user to projects mapping
+                    user_projects_map = get_user_projects_mapping_cached(selected_date.isoformat())
+                    
+                    # Enhance user data with project names
+                    enhanced_user_data = []
+                    for user in st.session_state.user_list_data:
+                        user_id = str(user.get("id", "")).strip()
+                        if not user_id or user_id == "None":
+                            user_id = ""
+                        
+                        # Try to find projects for this user
+                        projects = user_projects_map.get(user_id, [])
+                        if not projects:
+                            # Try lowercase, uppercase, and no-dash variants
+                            user_id_lower = user_id.lower()
+                            user_id_upper = user_id.upper()
+                            user_id_no_dashes = user_id.replace("-", "")
+                            projects = (user_projects_map.get(user_id_lower) or 
+                                       user_projects_map.get(user_id_upper) or 
+                                       user_projects_map.get(user_id_no_dashes) or
+                                       user_projects_map.get(user_id_no_dashes.lower()) or
+                                       [])
+                        
+                        # Create enhanced user dict with project names
+                        enhanced_user = user.copy()
+                        enhanced_user["allocated_projects_list"] = ", ".join(projects) if projects else "No projects"
+                        enhanced_user["allocated_projects_count"] = len(projects)
+                        enhanced_user_data.append(enhanced_user)
+                    
+                    # Create DataFrame with project names column
+                    df_users = pd.DataFrame(enhanced_user_data)
+                    if not df_users.empty:
+                        # Reorder columns to show project names prominently
+                        columns_order = ["name", "email", "allocated_projects_list", "allocated_projects_count", "work_role", "today_status"]
+                        # Add any other columns that exist
+                        other_cols = [col for col in df_users.columns if col not in columns_order]
+                        columns_order.extend(other_cols)
+                        # Only use columns that exist in the dataframe
+                        columns_order = [col for col in columns_order if col in df_users.columns]
+                        df_users = df_users[columns_order]
+                        # Rename for display
+                        df_users = df_users.rename(columns={
+                            "allocated_projects_list": "Allocated Projects",
+                            "allocated_projects_count": "Projects Count"
+                        })
+                        st.dataframe(df_users, use_container_width=True, height=400)
+                        export_csv(f"{list_title.replace(' ', '_')}_{selected_date}.csv", enhanced_user_data)
+                    else:
+                        st.info("No users found.")
+                elif st.session_state.show_user_list == "leave":
+                    # For Leave users, add a "View History" column using custom table
+                    df_users = pd.DataFrame(st.session_state.user_list_data)
+                    if not df_users.empty:
+                        # Get column names from dataframe
+                        columns = list(df_users.columns)
+                        
+                        # Create header row
+                        header_cols = st.columns([1] * len(columns) + [1.2])  # Extra column for View History
+                        for idx, col in enumerate(columns):
+                            with header_cols[idx]:
+                                st.markdown(f"**{col}**")
+                        with header_cols[-1]:
+                            st.markdown("**View History**")
+                        
+                        st.markdown("---")
+                        
+                        # Create data rows with View History buttons
+                        for row_idx, user in enumerate(st.session_state.user_list_data):
+                            row_cols = st.columns([1] * len(columns) + [1.2])
+                            
+                            # Display data columns
+                            for col_idx, col in enumerate(columns):
+                                with row_cols[col_idx]:
+                                    value = user.get(col, "")
+                                    st.write(str(value) if value is not None else "")
+                            
+                            # View History button column
+                            with row_cols[-1]:
+                                user_id = str(user.get("id", "")).strip()
+                                user_name = user.get("name", "Unknown")
+                                if st.button("📋 View History", key=f"view_history_{user_id}_{row_idx}", use_container_width=True):
+                                    # Store navigation parameters in session state
+                                    st.session_state.navigate_to_approvals = True
+                                    st.session_state.approval_tab = "history"
+                                    st.session_state.approval_user_id = user_id
+                                    st.session_state.approval_user_name = user_name
+                                    st.session_state.approval_date_from = selected_date.isoformat()
+                                    st.session_state.approval_date_to = selected_date.isoformat()
+                                    # Navigate to attendance approvals page
+                                    st.switch_page("app_pages/6_Attendance_Approvals.py")
+                            
+                            if row_idx < len(st.session_state.user_list_data) - 1:
+                                st.markdown("---")
+                        
+                        # Also show export option
+                        export_csv(f"{list_title.replace(' ', '_')}_{selected_date}.csv", st.session_state.user_list_data)
+                    else:
+                        st.info("No users found.")
                 else:
-                    st.info("No users found.")
+                    # For other user lists, show as before
+                    df_users = pd.DataFrame(st.session_state.user_list_data)
+                    if not df_users.empty:
+                        st.dataframe(df_users, use_container_width=True, height=400)
+                        export_csv(f"{list_title.replace(' ', '_')}_{selected_date}.csv", st.session_state.user_list_data)
+                    else:
+                        st.info("No users found.")
                 
                 col1, col2 = st.columns([4, 1])
                 with col2:
@@ -948,6 +1098,7 @@ with tab1:
     # SECTION 3: PROJECT CARDS
     st.markdown("## 📁 Project Cards")
     st.markdown("Project cards showing total number of tasks performed, total hours clocked, and count of different roles")
+    st.caption("ℹ️ **Note:** The 'Total Users' count in project cards shows users with role='USER' or 'ADMIN' to match the 'Allocated' card count. Click 'Total Users' to see all project members including MANAGER roles.")
     
     # Fetch project data with metrics (using cached functions)
     projects_with_metrics = []
@@ -973,40 +1124,77 @@ with tab1:
         allocation_data = get_project_allocation_cached(project_id, date_str, only_active=True)
         
         total_users_in_project = 0
+        total_user_admin_role_members = 0  # Count USER and ADMIN role members (to match Allocated card)
         if allocation_data:
             # First, try to use total_resources from API response (most reliable)
             if "total_resources" in allocation_data:
-                total_users_in_project = allocation_data.get("total_resources", 0)
-                print(f"[DEBUG] Project {project.get('name', project_id)}: Using total_resources={total_users_in_project} (active members only)")
+                total_all_members = allocation_data.get("total_resources", 0)
+                # Filter to count only USER and ADMIN role members (to match Allocated card logic)
+                if allocation_data.get("resources"):
+                    resources = aggregate_by_user(allocation_data["resources"])
+                    # Count only members with designation='USER' or 'ADMIN' (matching Allocated card filter)
+                    user_admin_role_resources = [
+                        r for r in resources 
+                        if r.get("designation", "").upper() in ["USER", "ADMIN"]
+                    ]
+                    total_user_admin_role_members = len(user_admin_role_resources)
+                    total_users_in_project = total_user_admin_role_members  # Use filtered count
+                    print(f"[DEBUG] Project {project.get('name', project_id)}: Total members={total_all_members}, USER/ADMIN role members={total_user_admin_role_members} (showing USER/ADMIN count to match Allocated card)")
+                else:
+                    total_users_in_project = total_all_members
+                    print(f"[DEBUG] Project {project.get('name', project_id)}: Using total_resources={total_users_in_project} (active members only, no role filter)")
             # Fallback: calculate from resources array if total_resources not available
             elif allocation_data.get("resources"):
                 resources = aggregate_by_user(allocation_data["resources"])
-                total_users_in_project = len(resources)
-                print(f"[DEBUG] Project {project.get('name', project_id)}: Calculated from resources={total_users_in_project}")
+                # Filter to count only USER and ADMIN role members
+                user_admin_role_resources = [
+                    r for r in resources 
+                    if r.get("designation", "").upper() in ["USER", "ADMIN"]
+                ]
+                total_user_admin_role_members = len(user_admin_role_resources)
+                total_users_in_project = total_user_admin_role_members  # Use filtered count
+                print(f"[DEBUG] Project {project.get('name', project_id)}: Calculated from resources - Total={len(resources)}, USER/ADMIN role={total_user_admin_role_members} (showing USER/ADMIN count)")
             
             # If we got 0 active members, try fetching all members (including inactive) to see if that's the issue
             if total_users_in_project == 0:
-                print(f"[DEBUG] Project {project.get('name', project_id)} (ID: {project_id}): No active members found. "
+                print(f"[DEBUG] Project {project.get('name', project_id)} (ID: {project_id}): No active USER/ADMIN role members found. "
                       f"Trying with only_active=False to check for inactive members...")
                 # Try with inactive members (different cache key, so no need to clear)
                 allocation_data_all = get_project_allocation_cached(project_id, date_str, only_active=False)
-                if allocation_data_all and allocation_data_all.get("total_resources", 0) > 0:
-                    total_users_in_project = allocation_data_all.get("total_resources", 0)
-                    print(f"[DEBUG] Project {project.get('name', project_id)}: Found {total_users_in_project} total members (including inactive)")
+                if allocation_data_all and allocation_data_all.get("resources"):
+                    resources_all = aggregate_by_user(allocation_data_all["resources"])
+                    # Still filter by USER/ADMIN role even for inactive members
+                    user_admin_role_resources_all = [
+                        r for r in resources_all 
+                        if r.get("designation", "").upper() in ["USER", "ADMIN"]
+                    ]
+                    total_user_admin_role_members = len(user_admin_role_resources_all)
+                    total_users_in_project = total_user_admin_role_members
+                    print(f"[DEBUG] Project {project.get('name', project_id)}: Found {total_user_admin_role_members} USER/ADMIN role members (including inactive) out of {len(resources_all)} total members")
                     # Update allocation_data to include all members
                     allocation_data = allocation_data_all
-                else:
-                    print(f"[DEBUG] Project {project.get('name', project_id)} (ID: {project_id}): total_users is 0. "
-                          f"Active: total_resources={allocation_data.get('total_resources')}, "
-                          f"resources_count={len(allocation_data.get('resources', []))}, "
-                          f"All (including inactive): total_resources={allocation_data_all.get('total_resources') if allocation_data_all else 'N/A'}")
+                elif allocation_data_all and allocation_data_all.get("total_resources", 0) > 0:
+                    # If we can't filter by role, use total but note it might include non-USER/ADMIN roles
+                    total_users_in_project = allocation_data_all.get("total_resources", 0)
+                    print(f"[DEBUG] Project {project.get('name', project_id)}: Found {total_users_in_project} total members (including inactive, may include non-USER/ADMIN roles)")
+                    allocation_data = allocation_data_all
         else:
             print(f"[DEBUG] Project {project.get('name', project_id)} (ID: {project_id}): allocation_data is None - API call failed or returned no data")
             # Try with only_active=False as fallback
             allocation_data = get_project_allocation_cached(project_id, date_str, only_active=False)
-            if allocation_data and "total_resources" in allocation_data:
+            if allocation_data and allocation_data.get("resources"):
+                resources = aggregate_by_user(allocation_data["resources"])
+                # Filter to count only USER and ADMIN role members
+                user_admin_role_resources = [
+                    r for r in resources 
+                    if r.get("designation", "").upper() in ["USER", "ADMIN"]
+                ]
+                total_user_admin_role_members = len(user_admin_role_resources)
+                total_users_in_project = total_user_admin_role_members
+                print(f"[DEBUG] Project {project.get('name', project_id)}: Fallback succeeded, found {total_user_admin_role_members} USER/ADMIN role members (including inactive) out of {len(resources)} total")
+            elif allocation_data and "total_resources" in allocation_data:
                 total_users_in_project = allocation_data.get("total_resources", 0)
-                print(f"[DEBUG] Project {project.get('name', project_id)}: Fallback succeeded, found {total_users_in_project} members (including inactive)")
+                print(f"[DEBUG] Project {project.get('name', project_id)}: Fallback succeeded, found {total_users_in_project} members (including inactive, may include non-USER/ADMIN roles)")
             else:
                 # Show a warning in the UI for debugging (only once per project)
                 if not hasattr(st.session_state, 'allocation_warnings_shown'):
@@ -1332,10 +1520,16 @@ with tab1:
                 
                 elif st.session_state.show_project_list.startswith("users_"):
                     st.markdown(f"### 📋 Users in Project - {proj.get('name')}")
+                    st.caption("ℹ️ Showing users with role='USER' or 'ADMIN' to match the Total Users count. Use the expander below to see all members including MANAGER roles.")
                     if proj_data.get("allocation_data") and proj_data["allocation_data"].get("resources"):
                         resources = aggregate_by_user(proj_data["allocation_data"]["resources"])
+                        # Filter to show only USER and ADMIN role members (to match the count)
+                        user_admin_resources = [
+                            r for r in resources 
+                            if r.get("designation", "").upper() in ["USER", "ADMIN"]
+                        ]
                         user_list = []
-                        for r in resources:
+                        for r in user_admin_resources:
                             user_metrics = [m for m in proj_data["metrics"] if m.get("user_id") == r.get("user_id")]
                             total_user_hours = sum(float(m.get("hours_worked", 0) or 0) for m in user_metrics)
                             total_user_tasks = sum(int(m.get("tasks_completed", 0) or 0) for m in user_metrics)
@@ -1343,6 +1537,7 @@ with tab1:
                             user_list.append({
                                 "name": r.get("name", "-"),
                                 "email": r.get("email", "-"),
+                                "designation": r.get("designation", "-"),
                                 "work_role": r.get("work_role", "-"),
                                 "attendance_status": r.get("attendance_status", "-"),
                                 "total_hours_clocked": f"{total_user_hours:.2f}",
@@ -1353,7 +1548,29 @@ with tab1:
                             st.dataframe(df_users, use_container_width=True, height=400)
                             export_csv(f"{proj.get('name')}_users_{selected_date}.csv", user_list)
                         else:
-                            st.info("No users found in this project.")
+                            st.info("No users with USER/ADMIN roles found in this project.")
+                        
+                        # Show all members (including MANAGER) in an expander
+                        if len(resources) > len(user_admin_resources):
+                            with st.expander(f"📋 Show All Members (including MANAGER roles) - {len(resources)} total"):
+                                all_user_list = []
+                                for r in resources:
+                                    user_metrics = [m for m in proj_data["metrics"] if m.get("user_id") == r.get("user_id")]
+                                    total_user_hours = sum(float(m.get("hours_worked", 0) or 0) for m in user_metrics)
+                                    total_user_tasks = sum(int(m.get("tasks_completed", 0) or 0) for m in user_metrics)
+                                    
+                                    all_user_list.append({
+                                        "name": r.get("name", "-"),
+                                        "email": r.get("email", "-"),
+                                        "designation": r.get("designation", "-"),
+                                        "work_role": r.get("work_role", "-"),
+                                        "attendance_status": r.get("attendance_status", "-"),
+                                        "total_hours_clocked": f"{total_user_hours:.2f}",
+                                        "total_tasks_performed": total_user_tasks
+                                    })
+                                if all_user_list:
+                                    df_all_users = pd.DataFrame(all_user_list)
+                                    st.dataframe(df_all_users, use_container_width=True, height=400)
                     else:
                         st.info("No allocation data available for this project.")
                 
@@ -1474,101 +1691,26 @@ with tab2:
 with tab3:
     st.markdown("## 🔍 Detailed Project View")
     
-    # Initialize session state for allocation popup (already initialized at top level)
-    if "show_allocation_popup" not in st.session_state:
-        st.session_state.show_allocation_popup = False
-    if "allocation_popup_data" not in st.session_state:
-        st.session_state.allocation_popup_data = None
-    
-    # Show popup only when explicitly triggered (not on page load)
-    # Only show allocation dialog if no other dialogs are active
-    if (st.session_state.get("show_allocation_popup") and 
-        st.session_state.get("allocation_popup_data") and
-        not st.session_state.get("show_user_list") and
-        not st.session_state.get("show_project_list")):
-        popup_data = st.session_state.allocation_popup_data
-        filtered_popup = popup_data["filtered"]
-        project_id_popup = popup_data["project_id"]
-        project_name_popup = popup_data["project_name"]
-        detail_date_popup = popup_data["date"]
-        
-        @st.dialog(f"📋 Allocation List - {project_name_popup}")
-        def show_allocation_dialog():
-            # Get metrics for tasks calculation
-            project_metrics = get_project_metrics_cached(project_id_popup, detail_date_popup.isoformat(), detail_date_popup.isoformat())
-            # Create a mapping of user_id to total tasks
-            user_tasks_map = {}
-            for m in project_metrics:
-                user_id = str(m.get("user_id"))
-                if user_id not in user_tasks_map:
-                    user_tasks_map[user_id] = 0
-                user_tasks_map[user_id] += int(m.get("tasks_completed", 0) or 0)
-            
-            # Prepare data for table
-            allocation_table_data = []
-            for r in filtered_popup:
-                user_id = str(r.get("user_id"))
-                tasks_completed = user_tasks_map.get(user_id, 0)
-                hours_worked = calculate_hours_worked(
-                    r.get("first_clock_in"),
-                    r.get("last_clock_out"),
-                    r.get("minutes_worked"),
-                )
-                allocation_table_data.append({
-                    "Name": r.get("name", "-"),
-                    "Email": r.get("email", "-"),
-                    "Designation": r.get("designation", "-"),
-                    "Work Role": r.get("work_role", "-"),
-                    "Reporting Manager": r.get("reporting_manager") or "-",
-                    "Status": r.get("attendance_status", "-"),
-                    "Tasks Completed": tasks_completed,
-                    "Clock In": format_time(r.get("first_clock_in")),
-                    "Clock Out": format_time(r.get("last_clock_out")),
-                    "Hours Worked": hours_worked
-                })
-            
-            if allocation_table_data:
-                df_allocation = pd.DataFrame(allocation_table_data)
-                st.dataframe(df_allocation, use_container_width=True, height=400)
-                export_csv(
-                    f"project_allocation_{project_name_popup}_{detail_date_popup}.csv",
-                    allocation_table_data
-                )
-            else:
-                st.info("No allocation data available.")
-            
-            col1, col2 = st.columns([4, 1])
-            with col2:
-                if st.button("Close", key="close_allocation_popup", use_container_width=True, type="primary"):
-                    st.session_state.show_allocation_popup = False
-                    st.session_state.allocation_popup_data = None
-                    st.rerun()
-        
-        show_allocation_dialog()
-    
     st.markdown("---")
     
     # Fetch projects (cached)
     all_projects = get_all_projects_cached()
     
-    # Filters
-    f1, f2, f3, f4, f5 = st.columns(5)
+    # Filters (using global selected_date)
+    f1, f2, f3, f4 = st.columns(4)
     
     with f1:
         selected_project = st.selectbox("Project", ["All"] + [p["name"] for p in all_projects], key="detail_project")
     
     with f2:
-        detail_date = st.date_input("Date", value=selected_date, max_value=date.today(), key="detail_date")
-    
-    with f3:
         designation_filter = st.selectbox("Designation", ["ALL", "ADMIN", "USER"], key="detail_designation")
     
-    with f4:
+    with f3:
         status_filter = st.selectbox(
             "Status", ["ALL", "PRESENT", "ABSENT", "LEAVE"], key="detail_status"
         )
     
-    with f5:
+    with f4:
         work_role_filter = st.selectbox(
             "Work Role",
             ["ALL"] + WORK_ROLE_OPTIONS,
@@ -1584,49 +1726,156 @@ with tab3:
                 break
         
         if project_id:
-            # Fetch resource data (cached)
-            data = get_project_allocation_cached(project_id, detail_date.isoformat())
+            # Fetch resource data (cached) - using global selected_date
+            data = get_project_allocation_cached(project_id, selected_date.isoformat())
             
             if data and data.get("resources"):
                 resources = aggregate_by_user(data["resources"])
                 
-                # Apply filters
-                filtered = resources
+                # Get weekoffs for users to identify weekoff users (consistent with Dashboard Overview)
+                detail_weekday = selected_date.strftime("%A").upper()
+                all_users_with_weekoffs = authenticated_request("GET", "/admin/users/", params={"limit": 1000}, show_error=False) or []
+                
+                # Create a mapping of user_id to weekoffs
+                user_weekoffs_map = {}
+                for user in all_users_with_weekoffs:
+                    if isinstance(user, dict):
+                        user_id = str(user.get("id", "")).strip()
+                        if not user_id or user_id == "None":
+                            continue
+                        weekoffs = user.get("weekoffs", [])
+                        weekoff_strings = []
+                        if weekoffs:
+                            for w in weekoffs:
+                                weekoff_value = None
+                                if isinstance(w, str):
+                                    weekoff_value = w.upper().strip()
+                                elif isinstance(w, dict):
+                                    weekoff_value = (w.get("value") or w.get("name") or "").upper().strip()
+                                elif hasattr(w, 'value'):
+                                    weekoff_value = str(w.value).upper().strip()
+                                elif hasattr(w, 'name'):
+                                    weekoff_value = str(w.name).upper().strip()
+                                elif hasattr(w, '__str__'):
+                                    weekoff_value = str(w).upper().strip()
+                                
+                                if weekoff_value and weekoff_value in ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"]:
+                                    weekoff_strings.append(weekoff_value)
+                        
+                        if weekoff_strings:
+                            user_weekoffs_map[user_id] = weekoff_strings
+                            # Also store ID variants for flexible matching
+                            user_weekoffs_map[user_id.lower()] = weekoff_strings
+                            user_weekoffs_map[user_id.upper()] = weekoff_strings
+                            user_weekoffs_map[user_id.replace("-", "")] = weekoff_strings
+                            user_weekoffs_map[user_id.replace("-", "").lower()] = weekoff_strings
+                
+                # Normalize attendance status (consistent with Dashboard Overview logic)
+                # WFH should be treated as ABSENT, and handle weekoffs
+                normalized_resources = []
+                for r in resources:
+                    user_id = str(r.get("user_id", "")).strip()
+                    attendance_status = r.get("attendance_status", "ABSENT")
+                    
+                    # Check if today is a weekoff for this user
+                    user_weekoffs = user_weekoffs_map.get(user_id, user_weekoffs_map.get(user_id.lower(), user_weekoffs_map.get(user_id.upper(), [])))
+                    is_weekoff = detail_weekday in user_weekoffs if user_weekoffs else False
+                    
+                    # Normalize status: WFH -> ABSENT (consistent with Dashboard Overview)
+                    normalized_status = attendance_status
+                    if attendance_status == "WFH":
+                        normalized_status = "ABSENT"
+                    elif not attendance_status or attendance_status == "":
+                        normalized_status = "ABSENT"
+                    
+                    # Add normalized status and weekoff flag
+                    r_normalized = r.copy()
+                    r_normalized["attendance_status_normalized"] = normalized_status
+                    r_normalized["is_weekoff"] = is_weekoff
+                    r_normalized["attendance_status_display"] = "WEEKOFF" if is_weekoff else normalized_status
+                    normalized_resources.append(r_normalized)
+                
+                # Apply filters (use normalized status for filtering)
+                filtered = normalized_resources
                 if designation_filter != "ALL":
                     filtered = [r for r in filtered if r.get("designation") == designation_filter]
                 if work_role_filter != "ALL":
                     filtered = [r for r in filtered if r.get("work_role") == work_role_filter]
                 if status_filter != "ALL":
-                    filtered = [r for r in filtered if r.get("attendance_status") == status_filter]
+                    # Filter by normalized status (consistent with Dashboard Overview)
+                    if status_filter == "PRESENT":
+                        filtered = [r for r in filtered if r.get("attendance_status_normalized") == "PRESENT" and not r.get("is_weekoff")]
+                    elif status_filter == "ABSENT":
+                        filtered = [r for r in filtered if r.get("attendance_status_normalized") == "ABSENT" and not r.get("is_weekoff")]
+                    elif status_filter == "LEAVE":
+                        filtered = [r for r in filtered if r.get("attendance_status_normalized") == "LEAVE" and not r.get("is_weekoff")]
                 
-                # Summary
+                # Summary (consistent with Dashboard Overview: exclude weekoffs from counts)
                 st.subheader("📌 Summary")
                 allocated = len(filtered)
-                present = sum(r["attendance_status"] == "PRESENT" for r in filtered)
-                absent = sum(r["attendance_status"] == "ABSENT" for r in filtered)
-                leave = sum(r["attendance_status"] == "LEAVE" for r in filtered)
+                # Count only non-weekoff users (consistent with Dashboard Overview)
+                non_weekoff_filtered = [r for r in filtered if not r.get("is_weekoff")]
+                present = sum(r.get("attendance_status_normalized") == "PRESENT" for r in non_weekoff_filtered)
+                absent = sum(r.get("attendance_status_normalized") == "ABSENT" for r in non_weekoff_filtered)
+                leave = sum(r.get("attendance_status_normalized") == "LEAVE" for r in non_weekoff_filtered)
+                weekoff_count = sum(r.get("is_weekoff") for r in filtered)
                 
-                c1, c2, c3, c4 = st.columns(4)
+                c1, c2, c3, c4, c5 = st.columns(5)
                 c1.metric("Allocated", allocated)
                 c2.metric("Present", present)
                 c3.metric("Absent", absent)
                 c4.metric("Leave", leave)
+                c5.metric("Weekoff", weekoff_count)
                 
-                # Allocation List - Show as popup
+                # Allocation List - Show directly in table
                 st.subheader("👥 Allocation List")
                 if not filtered:
                     st.info("No users match the selected filters.")
                 else:
-                    # Button to show allocation list
-                    if st.button(f"📋 View Allocation List ({len(filtered)} users)", key="btn_view_allocation", use_container_width=True, type="primary"):
-                        st.session_state.show_allocation_popup = True
-                        st.session_state.allocation_popup_data = {
-                            "filtered": filtered,
-                            "project_id": project_id,
-                            "project_name": selected_project,
-                            "date": detail_date
-                        }
-                        st.rerun()
+                    # Get metrics for tasks calculation - using global selected_date
+                    project_metrics = get_project_metrics_cached(project_id, selected_date.isoformat(), selected_date.isoformat())
+                    # Create a mapping of user_id to total tasks
+                    user_tasks_map = {}
+                    for m in project_metrics:
+                        user_id = str(m.get("user_id"))
+                        if user_id not in user_tasks_map:
+                            user_tasks_map[user_id] = 0
+                        user_tasks_map[user_id] += int(m.get("tasks_completed", 0) or 0)
+                    
+                    # Prepare data for table
+                    allocation_table_data = []
+                    for r in filtered:
+                        user_id = str(r.get("user_id"))
+                        tasks_completed = user_tasks_map.get(user_id, 0)
+                        hours_worked = calculate_hours_worked(
+                            r.get("first_clock_in"),
+                            r.get("last_clock_out"),
+                            r.get("minutes_worked"),
+                        )
+                        # Use normalized status for display (consistent with Dashboard Overview)
+                        status_display = r.get("attendance_status_display", r.get("attendance_status_normalized", r.get("attendance_status", "-")))
+                        allocation_table_data.append({
+                            "Name": r.get("name", "-"),
+                            "Email": r.get("email", "-"),
+                            "Designation": r.get("designation", "-"),
+                            "Work Role": r.get("work_role", "-"),
+                            "Reporting Manager": r.get("reporting_manager") or "-",
+                            "Status": status_display,  # Use normalized status (WEEKOFF, PRESENT, ABSENT, LEAVE)
+                            "Tasks Completed": tasks_completed,
+                            "Clock In": format_time(r.get("first_clock_in")),
+                            "Clock Out": format_time(r.get("last_clock_out")),
+                            "Hours Worked": hours_worked
+                        })
+                    
+                    if allocation_table_data:
+                        df_allocation = pd.DataFrame(allocation_table_data)
+                        st.dataframe(df_allocation, use_container_width=True, height=400)
+                        export_csv(
+                            f"project_allocation_{selected_project}_{selected_date}.csv",
+                            allocation_table_data
+                        )
+                    else:
+                        st.info("No allocation data available.")
             else:
                 st.info("No allocation data found for this project.")
         else:

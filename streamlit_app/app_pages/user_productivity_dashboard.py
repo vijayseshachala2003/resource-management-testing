@@ -84,6 +84,14 @@ def get_user_name_mapping() -> Dict[str, str]:
     return {str(user["id"]): user["name"] for user in users}
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_user_email_mapping() -> Dict[str, str]:
+    """Fetch all users and create UUID -> email mapping"""
+    users = authenticated_request("GET", "/admin/users/", params={"limit": 1000})
+    if not users:
+        return {}
+    return {str(user["id"]): user.get("email", "") for user in users}
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_user_soul_id_mapping() -> Dict[str, str]:
     """Fetch all users and create UUID -> soul_id mapping"""
     users = authenticated_request("GET", "/admin/users/", params={"limit": 1000})
@@ -215,6 +223,8 @@ def fetch_user_productivity_data(start_date: Optional[date] = None, end_date: Op
     quality_map = {}
     quality_score_map = {}
     quality_source_map = {}
+    accuracy_map = {}
+    critical_rate_map = {}
     if quality_data:
         for q in quality_data:
             key = (str(q["user_id"]), str(q["project_id"]), pd.to_datetime(q["metric_date"]).date())
@@ -232,6 +242,10 @@ def fetch_user_productivity_data(start_date: Optional[date] = None, end_date: Op
             # Store quality score and source
             quality_score_map[key] = q.get("quality_score")
             quality_source_map[key] = q.get("source", "MANUAL")
+            
+            # Store accuracy and critical_rate (new metrics)
+            accuracy_map[key] = q.get("accuracy")
+            critical_rate_map[key] = q.get("critical_rate")
     
     # Map quality ratings to metrics
     df_metrics["quality_rating"] = df_metrics.apply(
@@ -257,10 +271,63 @@ def fetch_user_productivity_data(start_date: Optional[date] = None, end_date: Op
         ), axis=1
     )
     
+    # Map accuracy and critical_rate
+    df_metrics["accuracy"] = df_metrics.apply(
+        lambda row: accuracy_map.get(
+            (str(row["user_id"]), str(row["project_id"]), row["date_obj"]),
+            None
+        ), axis=1
+    )
+    
+    df_metrics["critical_rate"] = df_metrics.apply(
+        lambda row: critical_rate_map.get(
+            (str(row["user_id"]), str(row["project_id"]), row["date_obj"]),
+            None
+        ), axis=1
+    )
+    
+    # Add quality assessments that don't have corresponding metrics
+    # This ensures quality-only assessments show up in the dashboard
+    if quality_data:
+        for q in quality_data:
+            q_date = pd.to_datetime(q["metric_date"]).date()
+            q_user_id = str(q["user_id"])
+            q_project_id = str(q["project_id"])
+            
+            # Check if this quality assessment already has a corresponding metric row
+            existing = df_metrics[
+                (df_metrics["user_id"].astype(str) == q_user_id) &
+                (df_metrics["project_id"].astype(str) == q_project_id) &
+                (df_metrics["date_obj"] == q_date)
+            ]
+            
+            # If no metric exists for this quality assessment, create a row for it
+            if len(existing) == 0:
+                new_row = {
+                    "date": q["metric_date"],
+                    "date_obj": q_date,
+                    "user_id": q_user_id,
+                    "project_id": q_project_id,
+                    "user": user_map.get(q_user_id, "Unknown"),
+                    "project": project_map.get(q_project_id, "Unknown"),
+                    "role": "Unknown",
+                    "hours_worked": 0,
+                    "tasks_completed": 0,
+                    "productivity_score": 0,
+                    "quality_rating": "Good" if q.get("quality_rating") == "GOOD" else ("Average" if q.get("quality_rating") == "AVERAGE" else ("Bad" if q.get("quality_rating") == "BAD" else "Not Assessed")),
+                    "quality_score": q.get("quality_score"),
+                    "quality_source": q.get("source", "MANUAL"),
+                    "accuracy": q.get("accuracy"),
+                    "critical_rate": q.get("critical_rate"),
+                    "attendance_status": "Absent"
+                }
+                df_metrics = pd.concat([df_metrics, pd.DataFrame([new_row])], ignore_index=True)
+    
     # Select and reorder columns to match expected format
     result_df = df_metrics[[
         "date", "user", "project", "role", "hours_worked", 
         "tasks_completed", "quality_rating", "quality_score", "quality_source",
+        "accuracy", "critical_rate",
         "productivity_score", "attendance_status"
     ]].copy()
     
@@ -269,7 +336,7 @@ def fetch_user_productivity_data(start_date: Optional[date] = None, end_date: Op
     result_df["tasks_completed"] = result_df["tasks_completed"].fillna(0)
     result_df["productivity_score"] = result_df["productivity_score"].fillna(0)
     result_df["quality_rating"] = result_df["quality_rating"].fillna("Not Assessed")
-    # quality_score can remain None for unassessed days
+    # quality_score, accuracy, critical_rate can remain None for unassessed days
     
     return result_df
 
@@ -368,9 +435,10 @@ with col1:
 
 with col2:
     if view_mode == "Specific User":
-        # Get soul_id mapping for search
+        # Get mappings
         soul_id_map = get_user_soul_id_mapping()
         user_map = get_user_name_mapping()
+        user_email_map = get_user_email_mapping()
         
         if not user_map:
             st.error("⚠️ Unable to load users. Please check your connection and try again.")
@@ -378,14 +446,24 @@ with col2:
         
         # Create reverse mapping: soul_id -> user_id
         soul_to_user_id = {v: k for k, v in soul_id_map.items() if v}
-        # Create user options with soul_id display
+        # Create user options with email and soul_id display: "Name (email) - Soul ID: xxx" or "Name (email)"
         user_options = []
+        user_display_to_name = {}
         for user_id, user_name in user_map.items():
+            email = user_email_map.get(user_id, "")
             soul_id = soul_id_map.get(user_id, "")
-            if soul_id:
-                user_options.append(f"{user_name} (Soul ID: {soul_id})")
+            
+            if email and soul_id:
+                display_name = f"{user_name} ({email}) - Soul ID: {soul_id}"
+            elif email:
+                display_name = f"{user_name} ({email})"
+            elif soul_id:
+                display_name = f"{user_name} (Soul ID: {soul_id})"
             else:
-                user_options.append(user_name)
+                display_name = user_name
+            
+            user_options.append(display_name)
+            user_display_to_name[display_name] = user_name
         
         if not user_options:
             st.error("⚠️ No users available to select.")
@@ -395,10 +473,7 @@ with col2:
         
         # Extract user name from selection
         if selected_user_display:
-            if "(Soul ID:" in selected_user_display:
-                selected_user = selected_user_display.split(" (Soul ID:")[0]
-            else:
-                selected_user = selected_user_display
+            selected_user = user_display_to_name.get(selected_user_display, selected_user_display.split(" (")[0])
             df_filtered = df[df["user"] == selected_user].copy()
         else:
             selected_user = None
@@ -579,7 +654,7 @@ st.markdown("---")
 # SUMMARY - KPI CARDS
 # =====================================================================
 st.markdown("### 📈 Summary Metrics")
-kpi_col1, kpi_col2, kpi_col3, kpi_col4, kpi_col5, kpi_col6 = st.columns(6)
+kpi_col1, kpi_col2, kpi_col3, kpi_col4, kpi_col5, kpi_col6, kpi_col7, kpi_col8 = st.columns(8)
 
 with kpi_col1:
     total_hours = df_filtered["hours_worked"].sum()
@@ -613,6 +688,24 @@ with kpi_col5:
             st.metric("Avg Quality Score", f"{avg_quality_score:.1f}")
         else:
             st.metric("Avg Quality Score", "N/A")
+
+with kpi_col6:
+    # Calculate average accuracy (only for assessed records)
+    accuracy_data = df_filtered[df_filtered["accuracy"].notna()]
+    if len(accuracy_data) > 0:
+        avg_accuracy = accuracy_data["accuracy"].mean()
+        st.metric("Avg Accuracy", f"{avg_accuracy:.1f}%")
+    else:
+        st.metric("Avg Accuracy", "N/A")
+
+with kpi_col7:
+    # Calculate average critical rate (only for assessed records)
+    critical_data = df_filtered[df_filtered["critical_rate"].notna()]
+    if len(critical_data) > 0:
+        avg_critical = critical_data["critical_rate"].mean()
+        st.metric("Avg Critical Rate", f"{avg_critical:.1f}%")
+    else:
+        st.metric("Avg Critical Rate", "N/A")
 
 st.markdown("---")
 
@@ -961,6 +1054,139 @@ with chart_col6:
             st.caption("💡 **Tip**: Navigate to 'Admin Projects' from the sidebar to assess quality ratings. Once assessed, quality scores will appear here.")
 
 # =====================================================================
+# ROW 3.5: Accuracy & Critical Rate Trends (NEW)
+# =====================================================================
+st.markdown("---")
+chart_col_acc, chart_col_crit = st.columns(2)
+
+with chart_col_acc:
+    st.markdown("#### Accuracy Trend Over Time")
+    # Filter to only records with accuracy data
+    accuracy_df = df_filtered[df_filtered["accuracy"].notna()].copy()
+    
+    # Debug info (can be removed later)
+    if st.session_state.get("debug_mode", False):
+        st.write(f"Debug: Total filtered rows: {len(df_filtered)}")
+        st.write(f"Debug: Rows with accuracy: {len(accuracy_df)}")
+        if len(accuracy_df) > 0:
+            st.write(f"Debug: Accuracy values: {accuracy_df['accuracy'].tolist()}")
+        if len(df_filtered) > 0 and "accuracy" in df_filtered.columns:
+            st.write(f"Debug: Accuracy column sample: {df_filtered[['date', 'user', 'accuracy']].head()}")
+    
+    if len(accuracy_df) > 0:
+        if view_mode == "All Users":
+            accuracy_by_date = accuracy_df.groupby(["date", "user"])["accuracy"].mean().reset_index()
+            fig_acc = px.line(
+                accuracy_by_date,
+                x="date",
+                y="accuracy",
+                color="user",
+                markers=True
+            )
+        else:
+            accuracy_by_date = accuracy_df.groupby("date")["accuracy"].mean().reset_index()
+            fig_acc = px.line(
+                accuracy_by_date,
+                x="date",
+                y="accuracy",
+                markers=True,
+                color_discrete_sequence=['#17becf']
+            )
+        
+        fig_acc.update_layout(
+            height=400,
+            hovermode='x unified',
+            xaxis_title="Date",
+            yaxis_title="Accuracy (%)",
+            yaxis=dict(range=[0, 100]),
+            showlegend=True if view_mode == "All Users" else False
+        )
+        st.plotly_chart(fig_acc, use_container_width=True)
+    else:
+        st.info("📊 No accuracy data available. Accuracy must be assessed in quality ratings.")
+
+with chart_col_crit:
+    st.markdown("#### Critical Rate Trend Over Time")
+    # Filter to only records with critical_rate data
+    critical_df = df_filtered[df_filtered["critical_rate"].notna()].copy()
+    
+    # Debug info (can be removed later)
+    if st.session_state.get("debug_mode", False):
+        st.write(f"Debug: Rows with critical_rate: {len(critical_df)}")
+        if len(critical_df) > 0:
+            st.write(f"Debug: Critical rate values: {critical_df['critical_rate'].tolist()}")
+    
+    if len(critical_df) > 0:
+        if view_mode == "All Users":
+            critical_by_date = critical_df.groupby(["date", "user"])["critical_rate"].mean().reset_index()
+            fig_crit = px.line(
+                critical_by_date,
+                x="date",
+                y="critical_rate",
+                color="user",
+                markers=True
+            )
+        else:
+            critical_by_date = critical_df.groupby("date")["critical_rate"].mean().reset_index()
+            fig_crit = px.line(
+                critical_by_date,
+                x="date",
+                y="critical_rate",
+                markers=True,
+                color_discrete_sequence=['#e377c2']
+            )
+        
+        fig_crit.update_layout(
+            height=400,
+            hovermode='x unified',
+            xaxis_title="Date",
+            yaxis_title="Critical Rate (%)",
+            yaxis=dict(range=[0, 100]),
+            showlegend=True if view_mode == "All Users" else False
+        )
+        st.plotly_chart(fig_crit, use_container_width=True)
+    else:
+        st.info("📊 No critical rate data available. Critical rate must be assessed in quality ratings.")
+
+# =====================================================================
+# ROW 3.6: Accuracy vs Critical Rate Scatter (NEW)
+# =====================================================================
+st.markdown("---")
+chart_col_scatter = st.columns(1)[0]
+
+with chart_col_scatter:
+    st.markdown("#### Accuracy vs Critical Rate")
+    
+    accuracy_critical_df = df_filtered[
+        (df_filtered["accuracy"].notna()) & 
+        (df_filtered["critical_rate"].notna())
+    ].copy()
+    
+    if len(accuracy_critical_df) > 0:
+        fig_scatter = px.scatter(
+            accuracy_critical_df,
+            x="accuracy",
+            y="critical_rate",
+            color="user" if view_mode == "All Users" else None,
+            size="tasks_completed",
+            hover_data=["date", "quality_rating"],
+            title="Accuracy vs Critical Rate"
+        )
+        
+        fig_scatter.update_layout(
+            height=400,
+            xaxis_title="Accuracy (%)",
+            yaxis_title="Critical Rate (%)",
+            xaxis=dict(range=[0, 100]),
+            yaxis=dict(range=[0, 100])
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
+        
+        st.caption("💡 Bubble size represents number of tasks completed")
+    else:
+        st.info("📊 No data available for accuracy vs critical rate analysis.")
+
+# =====================================================================
 # ROW 4: User Quality Trend Chart
 # =====================================================================
 st.markdown("#### User Quality Trend Chart")
@@ -1012,6 +1238,58 @@ if len(assessed_with_scores) > 0:
         st.info("📊 No quality trend data to display")
 else:
     st.info("📊 No quality assessments available. Quality ratings must be manually assessed to see trends.")
+
+# =====================================================================
+# ROW 4.5: User Performance Heatmap (NEW)
+# =====================================================================
+st.markdown("---")
+st.markdown("#### User Performance Heatmap")
+
+# Create a heatmap showing different metrics across dates
+if view_mode == "Specific User":
+    # For single user, show metrics across dates
+    metrics_for_heatmap = ["productivity_score", "quality_score", "accuracy", "critical_rate"]
+    
+    # Filter data with at least one metric
+    heatmap_df = df_filtered[
+        df_filtered[metrics_for_heatmap].notna().any(axis=1)
+    ].copy()
+    
+    if len(heatmap_df) > 0:
+        # Normalize metrics to 0-100 scale for comparison
+        heatmap_data = heatmap_df.groupby("date").agg({
+            "productivity_score": "mean",
+            "quality_score": lambda x: x.mean() * 10 if x.notna().any() else None,  # Scale 0-10 to 0-100
+            "accuracy": "mean",
+            "critical_rate": "mean"
+        }).reset_index()
+        
+        # Transpose for better visualization
+        heatmap_pivot = heatmap_data.set_index("date").T
+        
+        fig_heatmap = go.Figure(data=go.Heatmap(
+            z=heatmap_pivot.values,
+            x=heatmap_pivot.columns,
+            y=["Productivity", "Quality (×10)", "Accuracy", "Critical Rate"],
+            colorscale='RdYlGn',
+            text=heatmap_pivot.values,
+            texttemplate='%{text:.1f}',
+            textfont={"size": 10},
+            colorbar=dict(title="Score")
+        ))
+        
+        fig_heatmap.update_layout(
+            height=300,
+            xaxis_title="Date",
+            yaxis_title="Metric",
+            xaxis=dict(side="bottom")
+        )
+        st.plotly_chart(fig_heatmap, use_container_width=True)
+        st.caption("💡 All metrics normalized to 0-100 scale for comparison. Quality score is multiplied by 10.")
+    else:
+        st.info("📊 No metric data available for heatmap visualization.")
+else:
+    st.info("📊 Select a specific user to view performance heatmap.")
 
 # =====================================================================
 # ROW 5: Cumulative Tasks vs Hours
@@ -1068,13 +1346,25 @@ with st.expander("📋 View Raw Data Table"):
     st.markdown("### Raw Data")
     display_df = df_filtered[["date", "user", "project", "role", "hours_worked", 
                                "tasks_completed", "quality_rating", "quality_score", "quality_source",
+                               "accuracy", "critical_rate",
                                "productivity_score", "attendance_status"]].sort_values("date", ascending=False)
     
-    # Format quality_score for display
-    if "quality_score" in display_df.columns:
-        display_df["quality_score"] = display_df["quality_score"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "N/A")
+    # Format columns for display
+    display_df_formatted = display_df.copy()
+    if "quality_score" in display_df_formatted.columns:
+        display_df_formatted["quality_score"] = display_df_formatted["quality_score"].apply(
+            lambda x: f"{x:.1f}" if pd.notna(x) else "N/A"
+        )
+    if "accuracy" in display_df_formatted.columns:
+        display_df_formatted["accuracy"] = display_df_formatted["accuracy"].apply(
+            lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A"
+        )
+    if "critical_rate" in display_df_formatted.columns:
+        display_df_formatted["critical_rate"] = display_df_formatted["critical_rate"].apply(
+            lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A"
+        )
     
-    st.dataframe(display_df, use_container_width=True, height=400)
+    st.dataframe(display_df_formatted, use_container_width=True, height=400)
     
     # Download button
     csv = display_df.to_csv(index=False).encode('utf-8')
@@ -1086,7 +1376,7 @@ with st.expander("📋 View Raw Data Table"):
     )
     
     # Info about quality
-    st.info("💡 **Quality Note**: Quality ratings are manually assessed and separate from productivity. 'Not Assessed' means no quality evaluation has been done for that day.")
+    st.info("💡 **Metrics Note**: Quality, Accuracy, and Critical Rate are assessed manually. 'N/A' means these metrics haven't been assessed for that day.")
     
     # Quick quality assessment button
     st.markdown("---")

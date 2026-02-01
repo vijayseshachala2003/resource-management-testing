@@ -474,6 +474,14 @@ with tab3:
         return {str(user["id"]): user["name"] for user in users}
     
     @st.cache_data(ttl=300)
+    def get_user_email_mapping_qa() -> dict:
+        """Fetch all users and create UUID -> email mapping"""
+        users = authenticated_request("GET", "/admin/users/", params={"limit": 1000}) or []
+        if not users:
+            return {}
+        return {str(user["id"]): user.get("email", "") for user in users}
+    
+    @st.cache_data(ttl=300)
     def get_project_name_mapping_qa() -> dict:
         """Fetch all projects and create UUID -> name mapping"""
         projects = authenticated_request("GET", "/admin/projects/") or []
@@ -500,23 +508,33 @@ with tab3:
         
         # Get mappings
         user_map = get_user_name_mapping_qa()
+        user_email_map = get_user_email_mapping_qa()
         project_map = get_project_name_mapping_qa()
         
         if not user_map or not project_map:
             st.error("⚠️ Unable to load users or projects. Please check your connection.")
         else:
-            # Create reverse mappings for display
-            user_id_to_name = {v: k for k, v in user_map.items()}
+            # Create user options with email display: "Name (email)"
+            user_options_display = {}
+            for user_id, user_name in user_map.items():
+                email = user_email_map.get(user_id, "")
+                if email:
+                    display_name = f"{user_name} ({email})"
+                else:
+                    display_name = user_name
+                user_options_display[display_name] = user_id
+            
+            # Create reverse mapping for project
             project_id_to_name = {v: k for k, v in project_map.items()}
             
             # Form fields
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                # User selection
-                user_options = sorted(user_map.values())
-                selected_user_name = st.selectbox("Select User", user_options, key="qa_user_pmc")
-                selected_user_id = user_id_to_name.get(selected_user_name)
+                # User selection with email
+                user_display_list = sorted(user_options_display.keys())
+                selected_user_display = st.selectbox("Select User", user_display_list, key="qa_user_pmc")
+                selected_user_id = user_options_display.get(selected_user_display)
             
             with col2:
                 # Project selection
@@ -550,6 +568,31 @@ with tab3:
                     key="qa_score_pmc"
                 )
             
+            # Accuracy and Critical Rate
+            col6, col7 = st.columns(2)
+            
+            with col6:
+                accuracy = st.number_input(
+                    "Accuracy (%)",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=None,
+                    step=0.1,
+                    help="Percentage of work completed correctly (0-100%). Optional.",
+                    key="qa_accuracy_pmc"
+                )
+            
+            with col7:
+                critical_rate = st.number_input(
+                    "Critical Rate (%)",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=None,
+                    step=0.1,
+                    help="Percentage of critical tasks handled successfully (0-100%). Optional.",
+                    key="qa_critical_rate_pmc"
+                )
+            
             # Notes
             notes = st.text_area(
                 "Assessment Notes (Optional)",
@@ -570,6 +613,8 @@ with tab3:
                             "metric_date": str(selected_date),
                             "rating": rating,
                             "quality_score": float(quality_score) if quality_score else None,
+                            "accuracy": float(accuracy) if accuracy is not None else None,
+                            "critical_rate": float(critical_rate) if critical_rate is not None else None,
                             "notes": notes if notes.strip() else None
                         }
                         
@@ -580,6 +625,7 @@ with tab3:
                             st.balloons()
                             # Clear cache to refresh data
                             get_user_name_mapping_qa.clear()
+                            get_user_email_mapping_qa.clear()
                             get_project_name_mapping_qa.clear()
                             # Force rerun to refresh the table
                             time.sleep(0.5)
@@ -614,7 +660,17 @@ with tab3:
                             lambda x: f"{x:.1f}" if x is not None else "N/A"
                         )
                     
-                    display_cols = ["metric_date", "quality_rating", "quality_score", "source", "notes"]
+                    if "accuracy" in df_quality.columns:
+                        df_quality["accuracy"] = df_quality["accuracy"].apply(
+                            lambda x: f"{x:.1f}%" if x is not None else "N/A"
+                        )
+                    
+                    if "critical_rate" in df_quality.columns:
+                        df_quality["critical_rate"] = df_quality["critical_rate"].apply(
+                            lambda x: f"{x:.1f}%" if x is not None else "N/A"
+                        )
+                    
+                    display_cols = ["metric_date", "quality_rating", "quality_score", "accuracy", "critical_rate", "source", "notes"]
                     display_cols = [col for col in display_cols if col in df_quality.columns]
                     
                     st.dataframe(
@@ -636,14 +692,16 @@ with tab3:
         - `metric_date`: Date in YYYY-MM-DD format
         - `rating`: Quality rating (GOOD, AVERAGE, or BAD)
         - `quality_score` (optional): Numeric score 0-10
+        - `accuracy` (optional): Accuracy percentage 0-100
+        - `critical_rate` (optional): Critical rate percentage 0-100
         - `work_role` (optional): Work role (will be fetched from project_members if not provided)
         - `notes` (optional): Assessment notes
         
         **Example CSV:**
         ```csv
-        user_email,project_code,metric_date,rating,quality_score,notes
-        user@example.com,PROJ001,2024-01-15,GOOD,8.5,Excellent work quality
-        user2@example.com,PROJ002,2024-01-15,AVERAGE,6.0,Acceptable quality
+        user_email,project_code,metric_date,rating,quality_score,accuracy,critical_rate,notes
+        user@example.com,PROJ001,2024-01-15,GOOD,8.5,95.0,88.5,Excellent work quality
+        user2@example.com,PROJ002,2024-01-15,AVERAGE,6.0,75.0,70.0,Acceptable quality
         ```
         """)
         
@@ -679,6 +737,7 @@ with tab3:
                             
                             st.balloons()
                             get_user_name_mapping_qa.clear()
+                            get_user_email_mapping_qa.clear()
                             get_project_name_mapping_qa.clear()
                             time.sleep(0.5)
                             st.rerun()
@@ -698,6 +757,8 @@ with tab3:
             "metric_date": ["2024-01-15"],
             "rating": ["GOOD"],
             "quality_score": [8.5],
+            "accuracy": [95.0],
+            "critical_rate": [88.5],
             "work_role": [""],
             "notes": ["Example quality assessment"]
         }
