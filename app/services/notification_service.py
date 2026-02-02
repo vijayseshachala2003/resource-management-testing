@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import Optional, List
 
 import requests
 
@@ -15,6 +15,7 @@ def send_attendance_request_decision_email(
     end_date: str,
     requester_name: Optional[str] = None,
     project_names: Optional[str] = None,
+    cc_emails: Optional[List[str]] = None,
 ) -> None:
     supabase_url = os.getenv("SUPABASE_URL")
     service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -33,6 +34,8 @@ def send_attendance_request_decision_email(
         "start_date": start_date,
         "end_date": end_date,
     }
+    if cc_emails:
+        payload["cc"] = cc_emails
     if requester_name:
         payload["requester_name"] = requester_name
     if project_names:
@@ -64,6 +67,10 @@ def send_attendance_request_created_email(
     reason: Optional[str],
     project_names: Optional[str],
 ) -> None:
+    rpm_cc_email = os.getenv("RPM_CC_EMAIL")
+    cc_emails = None
+    if rpm_cc_email:
+        cc_emails = [email.strip() for email in rpm_cc_email.split(",") if email.strip()]
     send_attendance_request_decision_email(
         user_email=recipient_email,
         user_name=recipient_name or recipient_email,
@@ -74,5 +81,6 @@ def send_attendance_request_created_email(
         end_date=end_date,
         requester_name=requester_name,
         project_names=project_names,
+        cc_emails=cc_emails,
     )
 
