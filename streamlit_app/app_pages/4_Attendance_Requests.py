@@ -85,6 +85,10 @@ if not token:
         st.rerun()
     st.stop()
 
+# Initialize attendance_form_counter if not exists
+if "attendance_form_counter" not in st.session_state:
+    st.session_state["attendance_form_counter"] = 0
+
 # ---------------- UI ----------------
 
 st.title("🏖️ Leave/WFH Requests")

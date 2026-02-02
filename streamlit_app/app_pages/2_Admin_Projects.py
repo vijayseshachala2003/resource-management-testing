@@ -121,6 +121,31 @@ with tab1:
     
     # --- BOTTOM: UPLOAD BULK PROJECTS
     with st.expander("Upload Bulk Project (in .csv)", expanded=False):
+        # Download template
+        st.markdown("#### 📥 Download CSV Template")
+        st.warning("⚠️ **Important:** When opening in Excel, dates may appear in DD-MM-YYYY format. The CSV file contains dates in YYYY-MM-DD format. If editing in Excel, ensure dates are saved as YYYY-MM-DD (e.g., 2024-01-15).")
+        # Create CSV with proper YYYY-MM-DD date format
+        import csv
+        import io
+        output = io.StringIO()
+        writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
+        # Write header
+        writer.writerow(["code", "name", "is_active", "start_date", "end_date"])
+        # Write data rows - dates in YYYY-MM-DD format
+        writer.writerow(["PROJ001", "Project Name", "true", "2024-01-15", "2024-12-31"])
+        writer.writerow(["PROJ002", "Another Project", "true", "2024-06-01", "2024-12-31"])
+        csv_template = output.getvalue().encode('utf-8')
+        
+        st.download_button(
+            label="📥 Download Projects CSV Template",
+            data=csv_template,
+            file_name="projects_template.csv",
+            mime="text/csv",
+            key="projects_template_download"
+        )
+        
+        st.markdown("---")
+        
         uploaded_file = st.file_uploader(
             "Upload a CSV file",
             type=["csv"],
@@ -135,7 +160,22 @@ with tab1:
                     st.error("Empty file.")
                 else:
                     st.success("File attached.")
-                    if st.button("Upload"):
+                    
+                    # Preview the CSV data before upload
+                    try:
+                        uploaded_file.seek(0)  # Reset file pointer
+                        df_preview = pd.read_csv(uploaded_file)
+                        st.markdown("#### 📄 CSV Preview")
+                        st.dataframe(df_preview, use_container_width=True, hide_index=True)
+                        st.caption(f"Total rows: {len(df_preview)}")
+                        
+                        # Reset file pointer again for upload
+                        uploaded_file.seek(0)
+                    except Exception as e:
+                        st.error(f"❌ Error reading CSV file: {str(e)}")
+                        st.stop()
+                    
+                    if st.button("Upload", type="primary"):
                         response = authenticated_request("POST", "/admin/bulk_uploads/projects", uploaded_file=uploaded_file)
                         
                         if not response:
@@ -143,8 +183,13 @@ with tab1:
                         else:
                             st.success(f"Inserted: {response['inserted']}")
                             error = response["errors"]
-                            error = "Error: None" if len(error) == 0 else "Errors: " + ','.join(error)
-                            st.warning(error)
+                            if len(error) == 0:
+                                st.info("✅ No errors")
+                            else:
+                                st.warning(f"⚠️ {len(error)} error(s) encountered:")
+                                with st.expander("View Errors", expanded=True):
+                                    for err in error:
+                                        st.text(err)
         else:
             st.warning("Select a file.")
 
