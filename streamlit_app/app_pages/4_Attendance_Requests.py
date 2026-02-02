@@ -349,43 +349,49 @@ with col_left:
             key="req_type_selectbox"
         )
         
+        # Initialize form submission counter to force widget state reset
+        if "attendance_form_counter" not in st.session_state:
+            st.session_state["attendance_form_counter"] = 0
+        
         # Use form to enable automatic clearing
         with st.form("attendance_request_form", clear_on_submit=True):
             # Date Range (no default values)
             col_a, col_b = st.columns(2)
             with col_a:
-                start_date = st.date_input("Start Date", value=None, min_value=date.today())
+                # Use counter-based key to ensure fresh state after form submission
+                start_date_key = f"start_date_input_{st.session_state['attendance_form_counter']}"
+                start_date = st.date_input("Start Date", value=None, min_value=date.today(), key=start_date_key)
             with col_b:
                 # For HALF-DAY, end_date should be same as start_date
                 if req_type == "HALF-DAY":
                     if start_date:
                         end_date = start_date
-                        st.date_input("End Date", value=start_date, disabled=True)
+                        end_date_key = f"end_date_input_{st.session_state['attendance_form_counter']}"
+                        st.date_input("End Date", value=start_date, disabled=True, key=end_date_key)
                     else:
                         end_date = None
-                        st.date_input("End Date", value=None, disabled=True)
+                        end_date_key = f"end_date_input_{st.session_state['attendance_form_counter']}"
+                        st.date_input("End Date", value=None, disabled=True, key=end_date_key)
                 else:
+                    # Use counter-based key to ensure fresh state after form submission
+                    end_date_key = f"end_date_input_{st.session_state['attendance_form_counter']}"
                     if start_date:
+                        # Get current end_date value from session state
+                        current_end_date = st.session_state.get(end_date_key)
+                        # If end_date exists and is valid, use it; otherwise use start_date
+                        if current_end_date and current_end_date >= start_date:
+                            end_date_value = current_end_date
+                        else:
+                            end_date_value = start_date
                         end_date = st.date_input(
                             "End Date",
-                            value=start_date,
+                            value=end_date_value,
                             min_value=start_date,
-                            key="end_date_input",
+                            key=end_date_key,
                         )
                     else:
                         end_date = None
-                        st.date_input("End Date", value=None, min_value=None)
-            
-            # Days calculation for SICK_LEAVE and FULL-DAY types
-            if start_date and end_date:
-                if req_type in ["SICK_LEAVE", "FULL-DAY"]:
-                    days = calc_days(start_date, end_date)
-                    if days > 2:
-                        st.warning(f"⚠️ {days} days leave will be marked as **Non-Paid Leave**")
-                    else:
-                        st.info(f"ℹ️ {days} day(s) - Paid Leave")
-                elif req_type == "HALF-DAY":
-                    st.info("ℹ️ 0.5 day - Half Day Leave")
+                        st.date_input("End Date", value=None, min_value=None, key=end_date_key)
             
             # Time fields - only for SHIFT_CHANGE and REGULARIZATION
             start_time = None
@@ -395,18 +401,20 @@ with col_left:
                 st.markdown("#### ⏰ Time Details")
                 time_col1, time_col2 = st.columns(2)
                 with time_col1:
+                    start_time_key = f"start_time_input_{st.session_state['attendance_form_counter']}"
                     start_time = st.time_input(
                         "Start Time",
                         value=time(9, 0),  # Default 9:00 AM
                         help="Select the start time for your shift/regularization",
-                        key="start_time_input"
+                        key=start_time_key
                     )
                 with time_col2:
+                    end_time_key = f"end_time_input_{st.session_state['attendance_form_counter']}"
                     end_time = st.time_input(
                         "End Time",
                         value=time(18, 0),  # Default 6:00 PM
                         help="Select the end time for your shift/regularization",
-                        key="end_time_input"
+                        key=end_time_key
                     )
                 
                 # Validation: end time should be after start time
@@ -415,7 +423,8 @@ with col_left:
                         st.warning("⚠️ End time should be after start time.")
             
             # Reason
-            reason = st.text_area("Reason", height=100, placeholder="Enter reason for request...")
+            reason_key = f"reason_input_{st.session_state['attendance_form_counter']}"
+            reason = st.text_area("Reason", height=100, placeholder="Enter reason for request...", key=reason_key)
             
             # Submit Button
             submitted = st.form_submit_button("✉️ Submit Request", type="primary", use_container_width=True)
@@ -455,6 +464,11 @@ with col_left:
                             if result:
                                 st.success("✅ Request submitted successfully!")
                                 invalidate_cache()
+                                # Increment counter to force fresh widget state on next render
+                                # This ensures all form fields are cleared properly
+                                st.session_state["attendance_form_counter"] += 1
+                                # Rerun to refresh the form with cleared state
+                                st.rerun()
                             else:
                                 st.error("❌ Failed to submit request. Please try again.")
                     else:
@@ -472,6 +486,11 @@ with col_left:
                         if result:
                             st.success("✅ Request submitted successfully!")
                             invalidate_cache()
+                            # Increment counter to force fresh widget state on next render
+                            # This ensures all form fields are cleared properly
+                            st.session_state["attendance_form_counter"] += 1
+                            # Rerun to refresh the form with cleared state
+                            st.rerun()
                         else:
                             st.error("❌ Failed to submit request. Please try again.")
 

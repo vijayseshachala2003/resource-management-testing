@@ -10,6 +10,7 @@ from app.models.project_members import ProjectMember
 from app.models.user import User
 from app.models.attendance_daily import AttendanceDaily
 from app.models.shift import Shift
+from app.models.history import TimeHistory
 
 router = APIRouter(
     prefix="/admin/project-resource-allocation",
@@ -91,7 +92,7 @@ def project_resource_allocation(
                 # ✅ DESIGNATION (system role)
                 "designation": user.role.value if user.role else None,
 
-                # ✅ WORK ROLE (project role)
+                # ✅ WORK ROLE (project role) - shows allocated role from ProjectMember
                 "work_role": pm.work_role,
 
                 "reporting_manager": manager.name if manager else None,
@@ -109,4 +110,58 @@ def project_resource_allocation(
         "date": target_date,
         "total_resources": len(result),
         "resources": result,
+    }
+
+
+@router.get("/role-counts")
+def get_project_role_counts(
+    project_id: str = Query(..., description="Project UUID"),
+    target_date: date = Query(date.today()),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Returns role counts for a project on a given date.
+    Counts each unique (user_id, work_role) combination separately,
+    so if a user worked in multiple roles, each role is counted.
+    
+    Example: If user clocks in as "ANNOTATION" in morning and "QC" in afternoon,
+    both roles will be counted (ANNOTATION: 1, QC: 1).
+    """
+    try:
+        project_id_uuid = UUID(project_id)
+    except (ValueError, TypeError):
+        from fastapi import HTTPException, status
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid project_id format: {project_id}"
+        )
+    
+    # Query TimeHistory to get all unique (user_id, work_role) combinations
+    # Note: TimeHistory is already imported at the top
+    
+    role_combinations = (
+        db.query(
+            TimeHistory.user_id,
+            TimeHistory.work_role
+        )
+        .filter(
+            TimeHistory.project_id == project_id_uuid,
+            TimeHistory.sheet_date == target_date
+        )
+        .distinct()
+        .all()
+    )
+    
+    # Count how many users worked in each role
+    # Each unique (user_id, work_role) combination counts as 1
+    role_counts = {}
+    for user_id, work_role in role_combinations:
+        if work_role and work_role.strip() and work_role != "Unknown":
+            role_counts[work_role] = role_counts.get(work_role, 0) + 1
+    
+    return {
+        "project_id": project_id,
+        "date": target_date,
+        "role_counts": role_counts
     }

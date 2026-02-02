@@ -117,6 +117,7 @@ def fetch_user_productivity_data(start_date: Optional[date] = None, end_date: Op
     """
     # Get name mappings
     user_map = get_user_name_mapping()
+    user_email_map = get_user_email_mapping()
     project_map = get_project_name_mapping()
     
     # Fetch user daily metrics
@@ -149,6 +150,7 @@ def fetch_user_productivity_data(start_date: Optional[date] = None, end_date: Op
     
     # Add user and project names
     df_metrics["user"] = df_metrics["user_id"].astype(str).map(user_map)
+    df_metrics["email"] = df_metrics["user_id"].astype(str).map(user_email_map)
     df_metrics["project"] = df_metrics["project_id"].astype(str).map(project_map)
     df_metrics["role"] = df_metrics["work_role"]
     
@@ -309,6 +311,7 @@ def fetch_user_productivity_data(start_date: Optional[date] = None, end_date: Op
                     "user_id": q_user_id,
                     "project_id": q_project_id,
                     "user": user_map.get(q_user_id, "Unknown"),
+                    "email": user_email_map.get(q_user_id, ""),
                     "project": project_map.get(q_project_id, "Unknown"),
                     "role": "Unknown",
                     "hours_worked": 0,
@@ -325,7 +328,7 @@ def fetch_user_productivity_data(start_date: Optional[date] = None, end_date: Op
     
     # Select and reorder columns to match expected format
     result_df = df_metrics[[
-        "date", "user", "project", "role", "hours_worked", 
+        "date", "user", "email", "project", "role", "hours_worked", 
         "tasks_completed", "quality_rating", "quality_score", "quality_source",
         "accuracy", "critical_rate",
         "productivity_score", "attendance_status"
@@ -1344,7 +1347,7 @@ with chart_col7:
 # =====================================================================
 with st.expander("📋 View Raw Data Table"):
     st.markdown("### Raw Data")
-    display_df = df_filtered[["date", "user", "project", "role", "hours_worked", 
+    display_df = df_filtered[["date", "user", "email", "project", "role", "hours_worked", 
                                "tasks_completed", "quality_rating", "quality_score", "quality_source",
                                "accuracy", "critical_rate",
                                "productivity_score", "attendance_status"]].sort_values("date", ascending=False)

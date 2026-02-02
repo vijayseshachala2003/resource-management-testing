@@ -43,6 +43,7 @@ def list_projects(
     is_active: Optional[bool] = None,
     start_date_from: Optional[date] = None,
     start_date_to: Optional[date] = None,
+    reference_date: Optional[date] = None,  # Optional date to check membership validity
     skip: int = 0,
     limit: int = 100
 ):
@@ -77,9 +78,18 @@ def list_projects(
 
     # --- 2. NEW LOGIC: INJECT USER ROLES ---
     # Fetch all active project memberships for this user
+    # Check both is_active AND date ranges to ensure assignment is valid for the reference date
+    # If reference_date is not provided, use today's date
+    check_date = reference_date if reference_date is not None else date.today()
+    
     my_memberships = db.query(ProjectMember).filter(
         ProjectMember.user_id == current_user.id,
-        ProjectMember.is_active == True
+        ProjectMember.is_active == True,
+        ProjectMember.assigned_from <= check_date,  # Assignment has started (or will start by reference date)
+        or_(
+            ProjectMember.assigned_to.is_(None),  # No end date (ongoing)
+            ProjectMember.assigned_to >= check_date    # End date hasn't passed (or hasn't passed by reference date)
+        )
     ).all()
     
     # Create a lookup map: {project_id: "Role Name"}

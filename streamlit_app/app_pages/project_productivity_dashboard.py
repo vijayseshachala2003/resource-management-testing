@@ -62,6 +62,14 @@ def get_user_name_mapping() -> Dict[str, str]:
     return {str(user["id"]): user["name"] for user in users}
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_user_email_mapping() -> Dict[str, str]:
+    """Fetch all users and create UUID -> email mapping"""
+    users = authenticated_request("GET", "/admin/users/", params={"limit": 1000})
+    if not users:
+        return {}
+    return {str(user["id"]): user.get("email", "") for user in users}
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_project_name_mapping() -> Dict[str, str]:
     """Fetch all projects and create UUID -> name mapping"""
     projects = authenticated_request("GET", "/admin/projects/", params={"limit": 1000})
@@ -78,6 +86,7 @@ def fetch_project_productivity_data(start_date: Optional[date] = None, end_date:
     """
     # Get name mappings
     user_map = get_user_name_mapping()
+    user_email_map = get_user_email_mapping()
     project_map = get_project_name_mapping()
     
     # Fetch user daily metrics (aggregated by project)
@@ -108,6 +117,7 @@ def fetch_project_productivity_data(start_date: Optional[date] = None, end_date:
     
     # Add user and project names
     df["user"] = df["user_id"].astype(str).map(user_map)
+    df["email"] = df["user_id"].astype(str).map(user_email_map)
     df["project"] = df["project_id"].astype(str).map(project_map)
     df["role"] = df["work_role"]
     
@@ -229,6 +239,7 @@ def fetch_project_productivity_data(start_date: Optional[date] = None, end_date:
                     "user_id": q_user_id,
                     "project_id": q_project_id,
                     "user": user_map.get(q_user_id, "Unknown"),
+                    "email": user_email_map.get(q_user_id, ""),
                     "project": project_map.get(q_project_id, "Unknown"),
                     "role": "Unknown",
                     "hours_worked": 0,
@@ -245,7 +256,7 @@ def fetch_project_productivity_data(start_date: Optional[date] = None, end_date:
     
     # Select and reorder columns
     result_df = df[[
-        "date", "project", "user", "role", "hours_worked",
+        "date", "project", "user", "email", "role", "hours_worked",
         "tasks_completed", "quality_rating", "quality_score", "quality_source",
         "accuracy", "critical_rate",
         "productivity_score", "active_users"
@@ -846,7 +857,7 @@ st.plotly_chart(fig9, use_container_width=True)
 # =====================================================================
 with st.expander("📋 View Raw Data Table"):
     st.markdown("### Raw Data")
-    display_df = df_filtered[["date", "project", "user", "role", "hours_worked", 
+    display_df = df_filtered[["date", "project", "user", "email", "role", "hours_worked", 
                                "tasks_completed", "quality_rating", "quality_score",
                                "accuracy", "critical_rate",
                                "productivity_score", "active_users"]].sort_values("date", ascending=False)

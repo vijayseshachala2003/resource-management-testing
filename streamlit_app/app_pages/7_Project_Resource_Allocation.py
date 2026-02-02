@@ -374,9 +374,9 @@ def get_user_name_mapping_from_data(users_data):
         print(f"[DEBUG] Sample user names: {unique_names}")
     return mapping
 
-@st.cache_data(ttl=60, show_spinner="Loading user data...")
+@st.cache_data(ttl=30, show_spinner="Loading user data...")
 def get_users_with_filter_cached(selected_date_str, silent_fail=False):
-    """Cache user data for 1 minute. If silent_fail=True, don't show API error in UI (for fallback flow)."""
+    """Cache user data for 30 seconds. If silent_fail=True, don't show API error in UI (for fallback flow)."""
     response = authenticated_request(
         "POST", 
         "/admin/users/users_with_filter",
@@ -426,7 +426,7 @@ def get_users_fallback():
     print(f"[DEBUG] Fallback: Converted to {len(result)} user objects")
     return result
 
-@st.cache_data(ttl=60, show_spinner="Loading metrics...")
+@st.cache_data(ttl=10, show_spinner="Loading metrics...")  # Reduced to 10 seconds for more real-time updates
 def get_project_metrics_cached(project_id, start_date_str, end_date_str):
     """Cache project metrics for 1 minute"""
     return authenticated_request("GET", "/admin/metrics/user_daily/", params={
@@ -435,7 +435,29 @@ def get_project_metrics_cached(project_id, start_date_str, end_date_str):
         "end_date": end_date_str
     }) or []
 
-@st.cache_data(ttl=60, show_spinner="Loading allocation data...")
+@st.cache_data(ttl=10, show_spinner="Loading role counts...")  # Reduced to 10 seconds for more real-time updates
+def get_project_role_counts_cached(project_id, target_date_str):
+    """Cache project role counts for 10 seconds
+    
+    Returns role counts where each unique (user_id, work_role) combination is counted separately.
+    This means if a user works in multiple roles, each role is counted.
+    
+    Args:
+        project_id: UUID string of the project
+        target_date_str: Date string in YYYY-MM-DD format
+    """
+    project_id_str = str(project_id) if project_id else None
+    if not project_id_str:
+        return None
+    
+    result = authenticated_request("GET", "/admin/project-resource-allocation/role-counts", params={
+        "project_id": project_id_str,
+        "target_date": target_date_str
+    }, show_error=False)
+    
+    return result
+
+@st.cache_data(ttl=10, show_spinner="Loading allocation data...")  # Reduced to 10 seconds for more real-time updates
 def get_project_allocation_cached(project_id, target_date_str, only_active=True):
     """Cache project allocation for 1 minute
     
@@ -542,12 +564,29 @@ if "allocation_page_init" not in st.session_state:
 # ---------------------------------------------------------
 st.title("📊 Project Resource Allocation Dashboard")
 st.caption("Comprehensive resource allocation, attendance, and productivity overview")
+st.info("ℹ️ **Real-time Updates:** Data refreshes every 10 seconds automatically. Use the 'Refresh Data' button to see your latest tasks and hours immediately after completing work.")
 st.markdown("---")
 
 # ---------------------------------------------------------
-# DATE SELECTOR (Global)
+# DATE SELECTOR (Global) AND REFRESH BUTTON
 # ---------------------------------------------------------
-selected_date = st.date_input("Select Date", value=date.today(), max_value=date.today(), key="allocation_date")
+col_date, col_refresh = st.columns([4, 1])
+with col_date:
+    selected_date = st.date_input("Select Date", value=date.today(), max_value=date.today(), key="allocation_date")
+with col_refresh:
+    st.write("")  # Spacing
+    if st.button("🔄 Refresh Data", use_container_width=True, help="Clear cache and reload all data to see latest updates"):
+        # Clear all relevant caches
+        get_all_projects_cached.clear()
+        get_project_metrics_cached.clear()
+        get_project_allocation_cached.clear()
+        get_user_projects_mapping_cached.clear()
+        get_users_with_filter_cached.clear()
+        get_user_name_mapping.clear()
+        st.cache_data.clear()  # Clear all remaining caches
+        st.success("✅ Cache cleared! Data will refresh...")
+        time.sleep(0.5)
+        st.rerun()
 
 # ---------------------------------------------------------
 # TABS
@@ -562,6 +601,12 @@ with tab1:
     # Use silent_fail=True so we don't show API error when fallback will succeed
     users_data = get_users_with_filter_cached(selected_date.isoformat(), silent_fail=True)
     print(f"[DEBUG] After primary API: users_data length = {len(users_data) if users_data else 0}")
+    
+    # Debug: Print status of first few users
+    if users_data:
+        print(f"[DEBUG STATUS] Sample user statuses:")
+        for u in users_data[:5]:
+            print(f"  - {u.get('name', 'Unknown')}: status={u.get('today_status', 'N/A')}, role={u.get('role', 'N/A')}")
     
     # If users API failed, try fallback: get users from simpler endpoint
     used_fallback = False
@@ -722,36 +767,39 @@ with tab1:
         canonical_id = user_id_variants_map.get(user_id.upper(), canonical_id)
         canonical_id = user_id_variants_map.get(user_id.replace("-", ""), canonical_id)
         
+        # Get the attendance status first - prioritize actual attendance over weekoff
+        status = u.get("today_status")
+        
         # Check if today is a weekoff for this user
         user_weekoffs = user_weekoffs_map.get(canonical_id, user_weekoffs_map.get(user_id, []))
         is_weekoff_today = today_weekday in user_weekoffs if user_weekoffs else False
         
         # Debug: Log weekoff check for users with weekoffs or potential matches
         if user_weekoffs or len(weekoff_users) < 5:
-            print(f"[DEBUG CHECK] User '{u.get('name', 'Unknown')}' (ID: {user_id}): canonical={canonical_id}, weekoffs={user_weekoffs}, today={today_weekday}, match={is_weekoff_today}")
+            print(f"[DEBUG CHECK] User '{u.get('name', 'Unknown')}' (ID: {user_id}): canonical={canonical_id}, weekoffs={user_weekoffs}, today={today_weekday}, match={is_weekoff_today}, status={status}")
         
-        if is_weekoff_today:
+        # IMPORTANT: If user has clocked in (status is PRESENT), prioritize that over weekoff
+        # This means if someone works on their weekoff, they should show as PRESENT
+        if status == "PRESENT":
+            present_users.append(u)
+            print(f"[DEBUG] User '{u.get('name', 'Unknown')}' is PRESENT (even if weekoff)")
+        elif is_weekoff_today and status not in ["PRESENT", "LEAVE"]:
+            # Only mark as weekoff if they haven't clocked in and it's their weekoff
             # Create a copy of the user dict and update status to WEEKOFF
             weekoff_user = u.copy()
             weekoff_user["today_status"] = "WEEKOFF"
             weekoff_users.append(weekoff_user)
             print(f"[DEBUG MATCH] ✅ User '{u.get('name', 'Unknown')}' added to weekoff list with status WEEKOFF!")
-            # Don't add to other categories if it's a weekoff
-            continue
-        
-        status = u.get("today_status")
-        # Handle None, empty string, and missing key - default to ABSENT if not marked as present
-        if not status or status == "":
-            absent_users.append(u)  # Default to ABSENT if no status
-        elif status == "PRESENT":
-            present_users.append(u)
-        elif status == "ABSENT":
-            absent_users.append(u)
         elif status == "LEAVE":
             leave_users.append(u)
+        elif status == "ABSENT":
+            absent_users.append(u)
         elif status == "WFH":
             # WFH users are counted as ABSENT for total calculation
             absent_users.append(u)
+        elif not status or status == "":
+            # Handle None, empty string, and missing key - default to ABSENT if not marked as present
+            absent_users.append(u)  # Default to ABSENT if no status
         else:
             # Any other status value - default to absent
             absent_users.append(u)
@@ -820,9 +868,30 @@ with tab1:
         st.write(f"**User Role Users (USER/ADMIN):** {len(user_role_users)} users after filtering")
         st.write(f"**Name Mapping:** {len(st.session_state.get('user_name_mapping_fallback', {}))} users in mapping")
         st.write(f"**Today's Weekday:** {today_weekday}")
+        st.write(f"**Selected Date:** {selected_date.isoformat()}")
         st.write(f"**Users with Weekoffs Mapped:** {len(user_weekoffs_map)} users")
         st.write(f"**Users with Today as Weekoff (in map):** {len(weekoff_user_ids_in_map)} users")
         st.write(f"**Weekoff Users Found (in role list):** {weekoff_count} users")
+        
+        # Show status breakdown
+        if user_role_users:
+            status_counts = {}
+            for u in user_role_users:
+                status = u.get("today_status", "N/A")
+                status_counts[status] = status_counts.get(status, 0) + 1
+            st.write(f"**Status Breakdown:** {status_counts}")
+            
+            # Show users with PRESENT status
+            present_users_debug = [u for u in user_role_users if u.get("today_status") == "PRESENT"]
+            if present_users_debug:
+                st.write(f"**Users with PRESENT status ({len(present_users_debug)}):**")
+                for u in present_users_debug[:5]:
+                    st.write(f"  - {u.get('name', 'Unknown')} (ID: {u.get('id', 'N/A')}, Role: {u.get('role', 'N/A')})")
+            else:
+                st.warning("⚠️ **No users found with PRESENT status!**")
+                # Show sample of what statuses we do have
+                sample_statuses = [u.get("today_status", "N/A") for u in user_role_users[:10]]
+                st.write(f"**Sample statuses from first 10 users:** {sample_statuses}")
         if weekoff_users_not_in_role_list:
             st.warning(f"⚠️ **{len(weekoff_users_not_in_role_list)} user(s) with weekoff today are NOT in the USER/ADMIN role list!** They may be MANAGER or filtered out.")
             missing_info = []
@@ -1114,7 +1183,7 @@ with tab1:
         proj_total_tasks = sum(int(m.get("tasks_completed", 0) or 0) for m in project_metrics)
         proj_total_hours = sum(float(m.get("hours_worked", 0) or 0) for m in project_metrics)
         
-        # Count roles
+        # Count roles from metrics (shows allocated roles from ProjectMember)
         role_counts = {}
         for m in project_metrics:
             role = m.get("work_role", "Unknown")
@@ -1510,6 +1579,7 @@ with tab1:
                                 "hours_worked": m.get("hours_worked", 0),
                                 "tasks_completed": m.get("tasks_completed", 0)
                             })
+                    
                     if role_list:
                         df_role = pd.DataFrame(role_list)
                         df_role = df_role[["user_name", "work_role", "hours_worked", "tasks_completed", "user_id"]]
@@ -1789,10 +1859,16 @@ with tab3:
                         normalized_status = "ABSENT"
                     
                     # Add normalized status and weekoff flag
+                    # IMPORTANT: If user clocked in (PRESENT), show PRESENT even on weekoff
+                    # Weekoff is only for display if they didn't clock in
                     r_normalized = r.copy()
                     r_normalized["attendance_status_normalized"] = normalized_status
                     r_normalized["is_weekoff"] = is_weekoff
-                    r_normalized["attendance_status_display"] = "WEEKOFF" if is_weekoff else normalized_status
+                    # Only show WEEKOFF if they didn't clock in (status is not PRESENT)
+                    if is_weekoff and normalized_status != "PRESENT":
+                        r_normalized["attendance_status_display"] = "WEEKOFF"
+                    else:
+                        r_normalized["attendance_status_display"] = normalized_status
                     normalized_resources.append(r_normalized)
                 
                 # Apply filters (use normalized status for filtering)
@@ -1828,25 +1904,60 @@ with tab3:
                 c5.metric("Weekoff", weekoff_count)
                 
                 # Allocation List - Show directly in table
-                st.subheader("👥 Allocation List")
+                st.subheader("👥 Daily Roster")
+                st.caption(f"📅 Showing tasks completed by members on **{selected_date.strftime('%B %d, %Y')}**")
                 if not filtered:
                     st.info("No users match the selected filters.")
                 else:
                     # Get metrics for tasks calculation - using global selected_date
                     project_metrics = get_project_metrics_cached(project_id, selected_date.isoformat(), selected_date.isoformat())
-                    # Create a mapping of user_id to total tasks
+                    # Create a mapping of user_id to total tasks (normalize user_id for matching)
                     user_tasks_map = {}
+                    # Create a mapping of user_id to task details by work_role
+                    user_tasks_details_map = {}
                     for m in project_metrics:
-                        user_id = str(m.get("user_id"))
-                        if user_id not in user_tasks_map:
-                            user_tasks_map[user_id] = 0
-                        user_tasks_map[user_id] += int(m.get("tasks_completed", 0) or 0)
+                        user_id = str(m.get("user_id", "")).strip().lower()
+                        tasks_count = int(m.get("tasks_completed", 0) or 0)
+                        work_role = m.get("work_role", "Unknown")
+                        
+                        if user_id and user_id != "none":
+                            # Sum total tasks
+                            if user_id not in user_tasks_map:
+                                user_tasks_map[user_id] = 0
+                            user_tasks_map[user_id] += tasks_count
+                            
+                            # Store task details by work_role
+                            if user_id not in user_tasks_details_map:
+                                user_tasks_details_map[user_id] = []
+                            if tasks_count > 0:
+                                user_tasks_details_map[user_id].append({
+                                    "work_role": work_role,
+                                    "tasks": tasks_count
+                                })
                     
                     # Prepare data for table
                     allocation_table_data = []
                     for r in filtered:
-                        user_id = str(r.get("user_id"))
+                        user_id = str(r.get("user_id", "")).strip().lower()
+                        # Try to get tasks with normalized user_id
                         tasks_completed = user_tasks_map.get(user_id, 0)
+                        task_details = user_tasks_details_map.get(user_id, [])
+                        
+                        # Format tasks done as a readable string with better formatting
+                        tasks_done_str = "-"
+                        if task_details:
+                            task_parts = []
+                            for detail in task_details:
+                                role = detail.get("work_role", "Unknown")
+                                count = detail.get("tasks", 0)
+                                if count > 0:
+                                    task_parts.append(f"{role}: {count}")
+                            if task_parts:
+                                tasks_done_str = " | ".join(task_parts)
+                        elif tasks_completed > 0:
+                            # Fallback: if we have total but no breakdown, show total
+                            tasks_done_str = f"{tasks_completed} tasks"
+                        
                         hours_worked = calculate_hours_worked(
                             r.get("first_clock_in"),
                             r.get("last_clock_out"),
@@ -1859,16 +1970,40 @@ with tab3:
                             "Email": r.get("email", "-"),
                             "Designation": r.get("designation", "-"),
                             "Work Role": r.get("work_role", "-"),
-                            "Reporting Manager": r.get("reporting_manager") or "-",
                             "Status": status_display,  # Use normalized status (WEEKOFF, PRESENT, ABSENT, LEAVE)
-                            "Tasks Completed": tasks_completed,
+                            "Tasks Done": tasks_done_str,  # Tasks completed on selected date - breakdown by role
+                            "Total Tasks": tasks_completed,  # Total count for quick reference
                             "Clock In": format_time(r.get("first_clock_in")),
                             "Clock Out": format_time(r.get("last_clock_out")),
-                            "Hours Worked": hours_worked
+                            "Hours Worked": hours_worked,
+                            "Reporting Manager": r.get("reporting_manager") or "-"
                         })
                     
                     if allocation_table_data:
                         df_allocation = pd.DataFrame(allocation_table_data)
+                        # Ensure tasks columns are always included and prominently displayed
+                        # Verify tasks columns exist
+                        if "Tasks Done" not in df_allocation.columns:
+                            df_allocation["Tasks Done"] = "-"
+                        if "Total Tasks" not in df_allocation.columns:
+                            df_allocation["Total Tasks"] = 0
+                        
+                        # Reorder columns to put tasks more prominently
+                        column_order = ["Name", "Email", "Designation", "Work Role", "Status", 
+                                       "Tasks Done", "Total Tasks", "Clock In", "Clock Out", 
+                                       "Hours Worked", "Reporting Manager"]
+                        # Only use columns that exist in the dataframe, but ensure tasks columns are included
+                        available_columns = list(df_allocation.columns)
+                        # Ensure tasks columns are in the order
+                        final_column_order = []
+                        for col in column_order:
+                            if col in available_columns:
+                                final_column_order.append(col)
+                        # Add any remaining columns that weren't in the order
+                        for col in available_columns:
+                            if col not in final_column_order:
+                                final_column_order.append(col)
+                        df_allocation = df_allocation[final_column_order]
                         st.dataframe(df_allocation, use_container_width=True, height=400)
                         export_csv(
                             f"project_allocation_{selected_project}_{selected_date}.csv",

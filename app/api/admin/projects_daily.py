@@ -31,7 +31,7 @@ def calculate_daily_metrics(
     Scans history for a specific project & date, sums up the work, 
     and saves it to the metrics table.
     """
-    # 1. Aggregation Query
+    # 1. Aggregation Query - Only count APPROVED entries
     raw_stats = db.query(
         TimeHistory.work_role,
         func.count(func.distinct(TimeHistory.user_id)).label("user_count"),
@@ -39,7 +39,8 @@ def calculate_daily_metrics(
         func.sum(TimeHistory.minutes_worked).label("total_minutes")
     ).filter(
         TimeHistory.project_id == payload.project_id,
-        TimeHistory.sheet_date == payload.target_date
+        TimeHistory.sheet_date == payload.target_date,
+        TimeHistory.status == "APPROVED"  # Only count approved time sheets
     ).group_by(TimeHistory.work_role).all()
 
     saved_metrics = []
