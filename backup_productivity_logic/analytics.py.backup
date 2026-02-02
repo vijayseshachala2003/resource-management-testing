@@ -63,51 +63,28 @@ def calculate_daily_productivity(
     p_metric.avg_productivity_score = 0
     p_metric.avg_hours_worked_per_user = avg_hours
 
-    # --- STEP 3: Grade Users (Relative to daily team performance) ---
+    # --- STEP 3: Grade Users (Versioning Logic) ---
+    bad_threshold = avg_tasks * 0.70 
     total_score_sum = 0
     results_summary = [] 
 
-    # Compute team benchmarks (tasks per hour)
-    total_project_hours = sum(float(log.total_mins or 0) for log in daily_logs) / 60
-    total_project_tasks = sum(log.total_tasks for log in daily_logs)
-
-    avg_tasks_per_hour = (
-        total_project_tasks / total_project_hours
-        if total_project_hours > 0 else 0
-    )
-
     for log in daily_logs:
-        user_hours = float(log.total_mins or 0) / 60
-        user_tasks = log.total_tasks or 0
-
-        # User productivity rate (tasks/hour)
-        user_tasks_per_hour = (
-            user_tasks / user_hours if user_hours > 0 else 0
-        )
-
-        # Variable score relative to team average
-        # Normalize so that avg rate = 7.0 (mid of AVERAGE band)
-        if avg_tasks_per_hour > 0:
-            raw_score = (user_tasks_per_hour / avg_tasks_per_hour) * 7.0
-            score = min(10.0, max(0.0, round(raw_score, 2)))
-        else:
-            score = 5.0  # fallback if no hours/tasks
-
-        # Rating thresholds
-        if score >= 7.5:
+        # 1. Determine Rating
+        if log.total_tasks > avg_tasks:
+            score = 10.0 
             rating_label = QualityRating.GOOD
-        elif score >= 5.0:
-            rating_label = QualityRating.AVERAGE
-        else:
+        elif log.total_tasks < bad_threshold: 
+            score = 3.0  
             rating_label = QualityRating.BAD
+        else:
+            score = 7.0  
+            rating_label = QualityRating.AVERAGE
 
         total_score_sum += score
 
         # 2. Update Daily Metrics (Numbers)
-        # IMPORTANT: Filter by project_id as well since users can work on multiple projects per day
         u_metric = db.query(UserDailyMetrics).filter(
             UserDailyMetrics.user_id == log.user_id,
-            UserDailyMetrics.project_id == project_id,
             UserDailyMetrics.metric_date == calculation_date
         ).first()
 
@@ -197,7 +174,7 @@ def calculate_daily_productivity(
     return {
         "status": "Success", 
         "project_avg_tasks": round(avg_tasks, 2), 
-        "bad_threshold": 5.0,  # Score threshold for BAD rating
+        "bad_threshold": round(bad_threshold, 2),
         "processed_users": active_users,
         "details": results_summary
     }

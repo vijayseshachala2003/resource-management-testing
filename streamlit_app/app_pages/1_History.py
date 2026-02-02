@@ -22,13 +22,63 @@ if "token" not in st.session_state:
 # --- HELPER ---
 def authenticated_request(method, endpoint, params=None):
     token = st.session_state.get("token")
+    if not token:
+        st.error("⚠️ No authentication token found. Please log in again.")
+        print(f"[History Page] No token found for request: {method} {endpoint}")
+        return None
+    
     headers = {"Authorization": f"Bearer {token}"}
+    full_url = f"{API_BASE_URL}{endpoint}"
+    
     try:
-        response = requests.request(method, f"{API_BASE_URL}{endpoint}", headers=headers, params=params)
+        print(f"[History Page] Making {method} request to: {full_url}")
+        if params:
+            print(f"[History Page] Request params: {params}")
+        
+        response = requests.request(
+            method, 
+            full_url, 
+            headers=headers, 
+            params=params,
+            timeout=(10, 30)
+        )
+        
+        print(f"[History Page] Response status: {response.status_code}")
+        
         if response.status_code >= 400:
+            error_detail = f"API Error {response.status_code}"
+            try:
+                error_response = response.json()
+                if isinstance(error_response, dict) and "detail" in error_response:
+                    error_detail = error_response["detail"]
+                print(f"[History Page] API Error Response: {error_response}")
+            except:
+                error_detail = response.text[:500] if response.text else f"HTTP {response.status_code}"
+                print(f"[History Page] API Error Text: {error_detail}")
+            
+            st.error(f"⚠️ API Error: {error_detail}")
             return None
-        return response.json()
-    except:
+        
+        result = response.json()
+        print(f"[History Page] Successfully received {len(result) if isinstance(result, list) else 'response'} from {endpoint}")
+        return result
+        
+    except requests.exceptions.ConnectionError as e:
+        error_msg = f"Could not connect to API server at {API_BASE_URL}"
+        print(f"[History Page] Connection Error: {error_msg} - {str(e)}")
+        st.error(f"⚠️ Connection Error: {error_msg}\n\nPlease check:\n1. Is the API server running?\n2. Is the API_BASE_URL correct? (Current: {API_BASE_URL})")
+        return None
+    except requests.exceptions.Timeout as e:
+        error_msg = f"Request timeout for {endpoint}"
+        print(f"[History Page] Timeout Error: {error_msg} - {str(e)}")
+        st.error(f"⚠️ Request Timeout: The API server took too long to respond.")
+        return None
+    except Exception as e:
+        error_msg = f"Request failed: {str(e)}"
+        print(f"[History Page] Request Error: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        st.error(f"⚠️ Request Error: {error_msg}")
         return None
 
 # --- PAGE HEADER ---
@@ -39,7 +89,9 @@ st.markdown("### 🔍 Filters")
 col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 0.5])
 
 # Fetch data first to populate project/role dropdowns
+print("[History Page] Initial fetch for dropdowns - calling /time/history without params")
 all_history = authenticated_request("GET", "/time/history") or []
+print(f"[History Page] Initial fetch returned {len(all_history)} records")
 
 # Default date = last day the user worked (latest sheet_date)
 default_date = date.today()
@@ -107,19 +159,25 @@ if st.session_state.history_filters_applied:
     active_project_filter = st.session_state.history_project_filter
     active_role_filter = st.session_state.history_role_filter
 else:
-    active_date_from = default_date
-    active_date_to = default_date
+    # When filters haven't been applied, show all history (no date filtering)
+    active_date_from = None
+    active_date_to = None
     active_project_filter = "All Projects"
     active_role_filter = "All Roles"
 
 params = {}
-if active_date_from:
-    params["start_date"] = str(active_date_from)
-if active_date_to:
-    params["end_date"] = str(active_date_to)
+# Only apply date filters if they have been explicitly set by the user
+if st.session_state.history_filters_applied:
+    if active_date_from:
+        params["start_date"] = str(active_date_from)
+    if active_date_to:
+        params["end_date"] = str(active_date_to)
 
 # 1. Fetch RAW activity logs (for the table & basic total stats)
+# If no date params, API will return all history for the user
+print(f"[History Page] Fetching history with params: {params}")
 time_history = authenticated_request("GET", "/time/history", params=params)
+print(f"[History Page] Received time_history: {type(time_history)}, length: {len(time_history) if isinstance(time_history, list) else 'N/A'}")
 
 # 2. Fetch Performance Metrics (for Productivity Scores)
 me = authenticated_request("GET", "/me/")
@@ -130,16 +188,27 @@ metrics_raw = []
 attendance_raw = []
 
 if user_id:
-    m_params = {"user_id": user_id, "start_date": str(date_from), "end_date": str(date_to)}
-    metrics_raw = authenticated_request("GET", "/admin/metrics/user_daily/", params=m_params) or []
+    # Use active filter dates if filters have been applied, otherwise use date inputs
+    metrics_date_from = active_date_from if st.session_state.history_filters_applied else date_from
+    metrics_date_to = active_date_to if st.session_state.history_filters_applied else date_to
+    
+    if metrics_date_from and metrics_date_to:
+        m_params = {"user_id": user_id, "start_date": str(metrics_date_from), "end_date": str(metrics_date_to)}
+        metrics_raw = authenticated_request("GET", "/admin/metrics/user_daily/", params=m_params) or []
+    else:
+        # If no date filters, fetch all metrics (or skip if API requires dates)
+        m_params = {"user_id": user_id}
+        metrics_raw = authenticated_request("GET", "/admin/metrics/user_daily/", params=m_params) or []
     
     # Note: /attendance-daily/ only supports user_id filter, no date range
     a_params = {"user_id": user_id}
     attendance_raw = authenticated_request("GET", "/attendance-daily/", params=a_params) or []
     
     # Filter attendance client-side by date range
-    if attendance_raw and date_from and date_to:
-        attendance_raw = [a for a in attendance_raw if str(date_from) <= a.get('attendance_date', '') <= str(date_to)]
+    filter_date_from = metrics_date_from if metrics_date_from else date_from
+    filter_date_to = metrics_date_to if metrics_date_to else date_to
+    if attendance_raw and filter_date_from and filter_date_to:
+        attendance_raw = [a for a in attendance_raw if str(filter_date_from) <= a.get('attendance_date', '') <= str(filter_date_to)]
 
 if time_history:
     df_logs = pd.DataFrame(time_history)
@@ -234,3 +303,16 @@ if time_history:
 else:
     st.info("📭 No work history found for this period. Start clocking in to track your time!")
     st.caption("Make sure you're logged in and have time entries recorded.")
+    
+    # Debug information
+    with st.expander("🔍 Debug Information", expanded=False):
+        st.write(f"**API Base URL:** {API_BASE_URL}")
+        st.write(f"**Endpoint:** `/time/history`")
+        st.write(f"**Request Params:** {params}")
+        st.write(f"**Response Type:** {type(time_history)}")
+        st.write(f"**Response Value:** {time_history}")
+        st.write(f"**Token Present:** {'Yes' if st.session_state.get('token') else 'No'}")
+        
+        if st.button("🔄 Retry API Call"):
+            st.cache_data.clear()
+            st.rerun()

@@ -127,7 +127,7 @@ def search_with_filters(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user)
 ):
-    date = payload.date
+    date_str = payload.date
     email = payload.email
     name = payload.name
     allocated = payload.allocated
@@ -135,7 +135,15 @@ def search_with_filters(
     is_active = payload.is_active
     status = payload.status
 
-    today = date
+    # Parse date string to date object, default to today if not provided
+    if date_str:
+        try:
+            from datetime import datetime as dt
+            today = dt.fromisoformat(date_str).date() if isinstance(date_str, str) else date_str
+        except (ValueError, AttributeError):
+            today = date.today()
+    else:
+        today = date.today()
     Manager = aliased(User)
 
     project_count_sq = (
@@ -148,6 +156,9 @@ def search_with_filters(
         .subquery()
     )
 
+    # Query attendance status for today
+    # Use func.max() which will prioritize PRESENT (alphabetically PRESENT > ABSENT > UNKNOWN)
+    # If user has multiple records for different projects, PRESENT will be selected
     attendance_sq = (
         db.query(
             AttendanceDaily.user_id.label("user_id"),
@@ -157,6 +168,17 @@ def search_with_filters(
         .group_by(AttendanceDaily.user_id)
         .subquery()
     )
+    
+    # Debug: Log the date being used for the query
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"[ATTENDANCE QUERY] Querying attendance for date: {today}, type: {type(today)}")
+    
+    # Debug: Count how many attendance records exist for today
+    attendance_count = db.query(AttendanceDaily).filter(
+        AttendanceDaily.attendance_date == today
+    ).count()
+    logger.info(f"[ATTENDANCE QUERY] Found {attendance_count} attendance records for date {today}")
 
     query = (
         db.query(
@@ -230,7 +252,7 @@ def search_with_filters(
             "id": r.id,
             "name": r.name,
             "email": r.email,
-            "role": r.role,
+            "role": r.role.value if hasattr(r.role, 'value') else str(r.role),  # Convert enum to string
             "work_role": r.work_role,
             "is_active": r.is_active,
             "shift_id": r.shift_id,

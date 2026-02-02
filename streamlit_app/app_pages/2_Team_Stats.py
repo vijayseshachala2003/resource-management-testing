@@ -129,14 +129,22 @@ def export_csv(filename, rows):
 
 # Cached API functions
 @st.cache_data(ttl=300, show_spinner="Loading projects...")
-def get_all_projects_cached():
-    """Cache projects list for 5 minutes"""
-    return authenticated_request("GET", "/admin/projects") or []
+def get_all_projects_cached(reference_date=None):
+    """Cache projects list for 5 minutes, optionally filtered by reference_date"""
+    params = {}
+    if reference_date:
+        params["reference_date"] = reference_date.isoformat()
+    return authenticated_request("GET", "/admin/projects", params=params) or []
 
 @st.cache_data(ttl=300, show_spinner="Loading your projects...")
-def get_user_projects_cached():
-    """Get projects where the current user is a member"""
-    all_projects = get_all_projects_cached()
+def get_user_projects_cached(reference_date=None):
+    """Get projects where the current user is a member, optionally filtered by reference_date"""
+    # Pass reference_date to API if provided
+    params = {}
+    if reference_date:
+        params["reference_date"] = reference_date.isoformat()
+    
+    all_projects = authenticated_request("GET", "/admin/projects", params=params) or []
     # Filter projects where current_user_role is not "N/A" (user is a member)
     user_projects = [
         p for p in all_projects 
@@ -264,16 +272,86 @@ def get_user_data_from_project_members(project_ids, selected_date):
     
     return list(users_dict.values())
 
-@st.cache_data(ttl=60, show_spinner="Loading metrics...")
+@st.cache_data(ttl=10, show_spinner="Loading metrics...")  # Reduced to 10 seconds for more real-time updates
 def get_project_metrics_cached(project_id, start_date_str, end_date_str):
-    """Cache project metrics for 1 minute"""
+    """Cache project metrics for 10 seconds"""
     return authenticated_request("GET", "/admin/metrics/user_daily/", params={
         "project_id": project_id,
         "start_date": start_date_str,
         "end_date": end_date_str
     }) or []
 
-@st.cache_data(ttl=60, show_spinner="Loading weekly metrics...")
+@st.cache_data(ttl=10, show_spinner="Loading role counts...")  # Reduced to 10 seconds for more real-time updates
+def get_project_role_counts_cached(project_id, target_date_str):
+    """Cache project role counts for 10 seconds
+    
+    Returns role counts where each unique (user_id, work_role) combination is counted separately.
+    This means if a user works in multiple roles, each role is counted.
+    
+    Args:
+        project_id: UUID string of the project
+        target_date_str: Date string in YYYY-MM-DD format
+    """
+    project_id_str = str(project_id) if project_id else None
+    if not project_id_str:
+        return None
+    
+    result = authenticated_request("GET", "/admin/project-resource-allocation/role-counts", params={
+        "project_id": project_id_str,
+        "target_date": target_date_str
+    }, show_error=False)
+    
+    return result
+
+@st.cache_data(ttl=10, show_spinner="Loading allocation data...")  # Reduced to 10 seconds for more real-time updates
+def get_project_allocation_cached(project_id, target_date_str, only_active=True):
+    """Cache project allocation for 10 seconds
+    
+    Args:
+        project_id: UUID string of the project
+        target_date_str: Date string in YYYY-MM-DD format
+        only_active: If True, only return active project members (default: True)
+    """
+    project_id_str = str(project_id) if project_id else None
+    if not project_id_str:
+        return None
+    
+    result = authenticated_request("GET", "/admin/project-resource-allocation/", params={
+        "project_id": project_id_str,
+        "target_date": target_date_str,
+        "only_active": only_active
+    }, show_error=False)
+    
+    return result
+
+def aggregate_by_user(rows):
+    """Aggregate multiple rows for the same user into a single row"""
+    aggregated = {}
+    for r in rows:
+        uid = r["user_id"]
+        if uid not in aggregated:
+            aggregated[uid] = r.copy()
+        else:
+            existing = aggregated[uid]
+            if r.get("first_clock_in") and (
+                not existing.get("first_clock_in")
+                or r["first_clock_in"] < existing["first_clock_in"]
+            ):
+                existing["first_clock_in"] = r["first_clock_in"]
+            if r.get("last_clock_out") and (
+                not existing.get("last_clock_out")
+                or r["last_clock_out"] > existing["last_clock_out"]
+            ):
+                existing["last_clock_out"] = r["last_clock_out"]
+            existing["minutes_worked"] = (
+                (existing.get("minutes_worked") or 0)
+                + (r.get("minutes_worked") or 0)
+            )
+            if existing["attendance_status"] != "PRESENT":
+                existing["attendance_status"] = r["attendance_status"]
+    return list(aggregated.values())
+
+@st.cache_data(ttl=10, show_spinner="Loading weekly metrics...")  # Reduced to 10 seconds for more real-time updates
 def get_user_daily_metrics_cached(user_id=None, project_ids=None, start_date_str=None, end_date_str=None):
     """Get user daily metrics for a date range"""
     params = {}
@@ -292,19 +370,56 @@ def get_user_daily_metrics_cached(user_id=None, project_ids=None, start_date_str
 # --- PAGE HEADER ---
 st.title("📊 Team Stats")
 st.markdown("Allocation count according to the status and roles of **your team** (people who share the same projects as you) including the total hours clocked, tasks performed, average time worked in a day. Use the project selector to view stats for a specific project or all projects combined.")
+st.info("ℹ️ **Real-time Updates:** Data refreshes every 10 seconds automatically. Use the 'Refresh Data' button to see your latest tasks and hours immediately after completing work or after approval.")
 
-# --- DATE SELECTOR ---
-selected_date = st.date_input("Select Date", value=date.today(), max_value=date.today(), key="team_stats_date")
+# --- DATE SELECTOR AND REFRESH BUTTON ---
+col_date, col_refresh = st.columns([3, 1])
+with col_date:
+    selected_date = st.date_input("Select Date", value=date.today(), max_value=date.today(), key="team_stats_date")
+with col_refresh:
+    st.write("")  # Spacing
+    if st.button("🔄 Refresh Data", use_container_width=True, help="Clear cache and reload all data to see latest updates"):
+        # Clear all relevant caches
+        get_project_metrics_cached.clear()
+        get_user_daily_metrics_cached.clear()
+        get_team_members_cached.clear()
+        get_user_projects_cached.clear()
+        get_user_data_cached.clear()
+        st.cache_data.clear()  # Clear all remaining caches
+        st.success("✅ Cache cleared! Data will refresh...")
+        time.sleep(0.5)
+        st.rerun()
 
 # --- GET USER'S PROJECTS AND TEAM MEMBERS ---
-user_projects = get_user_projects_cached()
+# Pass selected_date to get projects valid for that date
+user_projects = get_user_projects_cached(reference_date=selected_date)
 if not user_projects:
     st.warning("⚠️ You are not assigned to any projects. Team stats will be empty.")
     st.info("Please contact an administrator to be assigned to a project.")
     st.stop()
 
+# Helper function to get project display name with fallback
+def get_project_display_name(project):
+    """Get project name with fallback to code or ID if name is missing"""
+    name = project.get("name")
+    if name and str(name).strip():
+        return str(name).strip()
+    
+    # Log warning if name is missing (for debugging)
+    project_id = project.get("id")
+    code = project.get("code")
+    print(f"[WARNING] Project {project_id} (code: {code}) has missing or empty name field")
+    
+    # Fallback to code if name is missing
+    if code and str(code).strip():
+        return f"{str(code).strip()} (No Name)"
+    # Last resort: use ID
+    if project_id:
+        return f"Project {str(project_id)[:8]}"
+    return "Unknown Project"
+
 # --- PROJECT SELECTOR ---
-project_options = ["All Projects"] + [p.get("name", "Unknown") for p in user_projects]
+project_options = ["All Projects"] + [get_project_display_name(p) for p in user_projects]
 selected_project_name = st.selectbox(
     "Select Project",
     options=project_options,
@@ -318,7 +433,11 @@ if selected_project_name == "All Projects":
     selected_project_ids = [p["id"] for p in user_projects]
     selected_project = None
 else:
-    selected_project = next((p for p in user_projects if p.get("name") == selected_project_name), None)
+    # Match by display name (handles cases where name might be missing)
+    selected_project = next(
+        (p for p in user_projects if get_project_display_name(p) == selected_project_name), 
+        None
+    )
     if selected_project:
         selected_project_ids = [selected_project["id"]]
     else:
@@ -347,11 +466,13 @@ if not team_member_ids:
 
 # Display selected project info
 if selected_project:
-    st.info(f"📁 **Viewing:** {selected_project.get('name', 'Unknown')} (Your role: {selected_project.get('current_user_role', 'N/A')})")
+    display_name = get_project_display_name(selected_project)
+    st.info(f"📁 **Viewing:** {display_name} (Your role: {selected_project.get('current_user_role', 'N/A')})")
 else:
     with st.expander(f"📁 Your Projects ({len(user_projects)})", expanded=False):
         for proj in user_projects:
-            st.caption(f"• {proj.get('name', 'Unknown')} (Your role: {proj.get('current_user_role', 'N/A')})")
+            display_name = get_project_display_name(proj)
+            st.caption(f"• {display_name} (Your role: {proj.get('current_user_role', 'N/A')})")
 
 # --- CALCULATE WEEKLY AVERAGES ---
 # Calculate week start (Monday) and end (Sunday) for the selected date
@@ -524,7 +645,8 @@ unknown_users = [u for u in user_role_users if u.get("today_status") == "UNKNOWN
 # --- SECTION 1: TEAM OVERVIEW METRICS ---
 st.markdown("## 👥 Team Overview")
 if selected_project:
-    st.markdown(f"Dashboard showing team members for **{selected_project.get('name', 'Unknown')}** - total count, present, and absent")
+    display_name = get_project_display_name(selected_project)
+    st.markdown(f"Dashboard showing team members for **{display_name}** - total count, present, and absent")
 else:
     st.markdown("Dashboard showing your team members (people who share the same projects as you) - total count, present, and absent")
 
@@ -678,7 +800,8 @@ st.markdown("---")
 # --- SECTION 3: OVERALL STATISTICS ---
 st.markdown("## 📈 Overall Statistics")
 if selected_project:
-    st.markdown(f"Total hours clocked, tasks performed, and average time worked in a day for **{selected_project.get('name', 'Unknown')}**")
+    display_name = get_project_display_name(selected_project)
+    st.markdown(f"Total hours clocked, tasks performed, and average time worked in a day for **{display_name}**")
 else:
     st.markdown("Total hours clocked, tasks performed, and average time worked in a day for **your team's projects**")
 
@@ -720,7 +843,8 @@ st.markdown("---")
 # --- SECTION 4: PROJECT CARDS ---
 st.markdown("## 📁 Project Cards")
 if selected_project:
-    st.markdown(f"Project card showing total number of tasks performed, total hours clocked, and count of different roles for **{selected_project.get('name', 'Unknown')}**")
+    display_name = get_project_display_name(selected_project)
+    st.markdown(f"Project card showing total number of tasks performed, total hours clocked, and count of different roles for **{display_name}**")
 else:
     st.markdown("Project cards showing total number of tasks performed, total hours clocked, and count of different roles for **your projects**")
 
@@ -741,7 +865,7 @@ for project in projects_to_display:
     proj_total_tasks = sum(int(m.get("tasks_completed", 0) or 0) for m in project_metrics)
     proj_total_hours = sum(float(m.get("hours_worked", 0) or 0) for m in project_metrics)
     
-    # Count roles
+    # Count roles from metrics (shows allocated roles from ProjectMember)
     role_counts = {}
     for m in project_metrics:
         role = m.get("work_role", "Unknown")
@@ -766,7 +890,8 @@ for i in range(0, len(projects_with_metrics), num_cols):
             
             with col:
                 with st.container(border=True):
-                    st.markdown(f"### {proj.get('name', 'Unknown Project')}")
+                    display_name = get_project_display_name(proj)
+                    st.markdown(f"### {display_name}")
                     
                     # Metrics
                     metric_col1, metric_col2 = st.columns(2)
@@ -888,7 +1013,7 @@ st.markdown("---")
 
 # Hours and Tasks by Project
 if projects_with_metrics:
-    proj_names = [p["project"].get("name", "Unknown") for p in projects_with_metrics]
+    proj_names = [get_project_display_name(p["project"]) for p in projects_with_metrics]
     proj_hours = [p["total_hours"] for p in projects_with_metrics]
     proj_tasks = [p["total_tasks"] for p in projects_with_metrics]
     

@@ -57,15 +57,20 @@ with tab1:
     st.subheader("Daily Attendance & Role Roster")
     c1, c2 = st.columns(2)
     with c1:
-        r_proj_name = st.selectbox("Select Project", list(project_map.keys()), key="r_proj")
+        project_options = ["All Projects"] + list(project_map.keys())
+        r_proj_name = st.selectbox("Select Project", project_options, key="r_proj")
     with c2:
         r_date = st.date_input("Report Date", date.today(), key="r_date")
     
     # 1. Preview Button
     if st.button("🔎 Preview Roster"):
-        r_proj_id = project_map[r_proj_name]
         url = f"{API_URL}/reports/role-drilldown"
-        params = {"project_id": r_proj_id, "report_date": str(r_date)}
+        params = {"report_date": str(r_date)}
+        
+        # Add project_id only if a specific project is selected
+        if r_proj_name != "All Projects":
+            r_proj_id = project_map[r_proj_name]
+            params["project_id"] = r_proj_id
         
         try:
             res = requests.get(url, headers=headers, params=params)
@@ -75,10 +80,11 @@ with tab1:
                 st.dataframe(df, use_container_width=True)
                 
                 # 3. Show Download Button
+                file_name_prefix = "All_Projects" if r_proj_name == "All Projects" else r_proj_name
                 st.download_button(
                     label="📥 Download CSV",
                     data=res.content,
-                    file_name=f"Roster_{r_proj_name}_{r_date}.csv",
+                    file_name=f"Roster_{file_name_prefix}_{r_date}.csv",
                     mime="text/csv",
                     type="primary"
                 )

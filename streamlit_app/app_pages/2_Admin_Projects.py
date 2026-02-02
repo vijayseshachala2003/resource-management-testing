@@ -5,6 +5,14 @@ import time
 from datetime import date, datetime, timedelta
 from role_guard import get_user_role
 
+def clear_team_stats_cache():
+    """Clear caches related to team stats and project assignments.
+    This ensures that when a person is assigned to a new project, 
+    the Team Stats page will show the updated information immediately."""
+    # Clear all cached data to ensure Team Stats page gets fresh data
+    # This is safe and ensures all related caches are cleared
+    st.cache_data.clear()
+
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Admin | Project Manager", layout="wide")
 
@@ -339,6 +347,8 @@ with tab2:
                             response = authenticated_request("POST", f"/admin/projects/{selected_proj_id}/members", data=payload)
                             
                             if response:
+                                # Clear team stats cache so new assignment is reflected immediately
+                                clear_team_stats_cache()
                                 st.success(f"✅ Member added successfully!")
                                 st.toast("Member added")
                                 time.sleep(1)
@@ -421,6 +431,8 @@ with tab2:
                                 
                                 response = authenticated_request("PUT", f"/admin/projects/{selected_proj_id}/members/{user_id_to_edit}", data=payload)
                                 if response is not None:
+                                    # Clear team stats cache so updated role is reflected immediately
+                                    clear_team_stats_cache()
                                     st.success(f"✅ {selected_edit_row['Name']}'s role updated from '{current_role}' to '{new_role}'")
                                     st.toast("Role updated")
                                     time.sleep(1)
@@ -450,6 +462,8 @@ with tab2:
                     
                     response = authenticated_request("DELETE", f"/admin/projects/{selected_proj_id}/members/{user_id_to_remove}")
                     if response is not None:
+                        # Clear team stats cache so removal is reflected immediately
+                        clear_team_stats_cache()
                         st.success(f"✅ {selected_row['Name']} removed from project")
                         st.toast("Member removed")
                         time.sleep(1)

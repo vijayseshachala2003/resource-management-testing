@@ -394,18 +394,20 @@ with col_left:
                 st.markdown("#### ⏰ Time Details")
                 time_col1, time_col2 = st.columns(2)
                 with time_col1:
+                    start_time_key = f"start_time_input_{st.session_state['attendance_form_counter']}"
                     start_time = st.time_input(
                         "Start Time",
                         value=time(9, 0),  # Default 9:00 AM
                         help="Select the start time for your shift/regularization",
-                        key="start_time_input"
+                        key=start_time_key
                     )
                 with time_col2:
+                    end_time_key = f"end_time_input_{st.session_state['attendance_form_counter']}"
                     end_time = st.time_input(
                         "End Time",
                         value=time(18, 0),  # Default 6:00 PM
                         help="Select the end time for your shift/regularization",
-                        key="end_time_input"
+                        key=end_time_key
                     )
 
                 # Validation: end time should be after start time
@@ -454,6 +456,11 @@ with col_left:
                             if result:
                                 st.success("✅ Request submitted successfully!")
                                 invalidate_cache()
+                                # Increment counter to force fresh widget state on next render
+                                # This ensures all form fields are cleared properly
+                                st.session_state["attendance_form_counter"] += 1
+                                # Rerun to refresh the form with cleared state
+                                st.rerun()
                             else:
                                 st.error("❌ Failed to submit request. Please try again.")
                     else:
@@ -471,6 +478,11 @@ with col_left:
                         if result:
                             st.success("✅ Request submitted successfully!")
                             invalidate_cache()
+                            # Increment counter to force fresh widget state on next render
+                            # This ensures all form fields are cleared properly
+                            st.session_state["attendance_form_counter"] += 1
+                            # Rerun to refresh the form with cleared state
+                            st.rerun()
                         else:
                             st.error("❌ Failed to submit request. Please try again.")
 
