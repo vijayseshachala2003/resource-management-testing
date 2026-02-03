@@ -39,7 +39,7 @@ PAGE_CONFIGS = {
     "7_Project_Resource_Allocation": {
         "file": "app_pages/7_Project_Resource_Allocation.py",
         "label": "Project Resource Allocation",
-        "icon": "📊",
+        "icon": "📁",
         "roles": ["ADMIN", "MANAGER"],
     },
     "user_productivity_dashboard": {
@@ -69,7 +69,7 @@ PAGE_CONFIGS = {
     "5_Approvals": {
         "file": "app_pages/5_Approvals.py",
         "label": "Timesheet Approvals",
-        "icon": "✅",
+        "icon": "🧾",
         "roles": ["ADMIN", "MANAGER"],
     },
     "6_Attendance_Approvals": {

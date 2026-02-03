@@ -60,6 +60,25 @@ def show_profile_section():
     """Display profile icon in top right with dropdown."""
     if "token" not in st.session_state:
         return
+
+    st.markdown(
+        """
+        <style>
+        section[data-testid="stSidebar"] {
+            width: 240px !important;
+            min-width: 240px !important;
+        }
+        section[data-testid="stSidebar"] > div {
+            padding-top: 0.5rem;
+        }
+        section[data-testid="stSidebar"] button {
+            padding: 0.25rem 0.5rem;
+            font-size: 12px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
     
     user_name = st.session_state.get("user_name", "User") or "User"
     user_email = st.session_state.get("user_email", "")
@@ -114,24 +133,50 @@ def logout():
 def login_ui():
     """Show login page with Google OAuth."""
     _hide_sidebar()
-    st.title("Login")
-    
+
+    st.markdown(
+        """
+        <style>
+        .login-title {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 6px;
+            color: #f8fafc;
+        }
+        .login-subtitle {
+            font-size: 14px;
+            color: #cbd5e1;
+            margin-bottom: 18px;
+        }
+        .login-meta {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-top: 8px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.markdown('<div class="login-title">Sign in</div>', unsafe_allow_html=True)
+    st.markdown('<div class="login-subtitle">Use your Google account to continue.</div>', unsafe_allow_html=True)
+
     # Show auth errors if any
     if st.session_state.get("_auth_error"):
-        st.error(f"❌ {st.session_state['_auth_error']}")
-        st.info("💡 Please contact an administrator to get access.")
+        st.error(st.session_state["_auth_error"])
+        st.info("Please contact an administrator to get access.")
         del st.session_state["_auth_error"]
-    
+
     # Check for error in URL
     error = st.query_params.get("error")
     if error:
         error_desc = st.query_params.get("error_description", "Unknown error")
-        st.warning(f"⚠️ {error_desc}")
+        st.warning(error_desc)
         st.query_params.clear()
-    
+
     if DISABLE_AUTH:
-        st.info("🔓 Auth is disabled - Click below to continue")
-        if st.button("Continue"):
+        st.info("Auth is disabled. Continue to the app.")
+        if st.button("Continue", use_container_width=True, type="primary"):
             st.session_state["token"] = "bypass_token"
             st.session_state["user_email"] = "admin@local.dev"
             st.session_state["user_id"] = "local-admin"
@@ -139,25 +184,25 @@ def login_ui():
             st.session_state["user_role"] = "ADMIN"
             st.rerun()
         return
-    
+
     from supabase_client import supabase
-    
+
     # Handle OAuth callback with code
     code = st.query_params.get("code")
     if code:
         try:
             res = supabase.auth.exchange_code_for_session({"auth_code": code})
-            
+
             if res and res.session:
                 token = res.session.access_token
-                
+
                 # Store basic info from Supabase
                 st.session_state["token"] = token
                 st.session_state["user_email"] = res.user.email
                 st.session_state["user_id"] = res.user.id
                 st.session_state["user_name"] = res.user.user_metadata.get("name", "")
                 st.session_state["user_avatar"] = res.user.user_metadata.get("avatar_url") or res.user.user_metadata.get("picture")
-                
+
                 # Sync role from backend
                 if _sync_role_from_backend(token):
                     st.query_params.clear()
@@ -168,23 +213,19 @@ def login_ui():
                     st.query_params.clear()
                     st.rerun()
         except Exception as e:
-            st.error(f"❌ Login failed: {e}")
+            st.error(f"Login failed: {e}")
             st.info("Please try clicking the login button again.")
             st.query_params.clear()
         return
-    
-    # Show login button
-    st.subheader("🔵 Continue with Google")
-    st.caption("Sign in with your Google account to continue.")
-    
+
     redirect_to = os.getenv("SUPABASE_REDIRECT_URL", "http://localhost:8501")
-    
+
     try:
         result = supabase.auth.sign_in_with_oauth({
             "provider": "google",
             "options": {"redirect_to": redirect_to},
         })
-        
+
         url = None
         if isinstance(result, dict):
             url = result.get("url") or (result.get("data") or {}).get("url")
@@ -192,7 +233,7 @@ def login_ui():
             url = getattr(result, "url", None)
             if not url and hasattr(result, "data"):
                 url = getattr(result.data, "url", None)
-        
+
         if url:
             # Store URL in session state for the button to use
             st.session_state["_oauth_url"] = url
@@ -200,15 +241,17 @@ def login_ui():
             st.error("Could not generate login URL")
     except Exception as e:
         st.error(f"OAuth error: {e}")
-    
+
     # Show login button that redirects in same tab
-    if st.button("🔵 Login with Google", use_container_width=True, type="primary"):
+    if st.button("Continue with Google", use_container_width=True, type="primary"):
         if "_oauth_url" in st.session_state:
             # Use meta refresh to redirect in same window
             st.markdown(
                 f'<meta http-equiv="refresh" content="0;url={st.session_state["_oauth_url"]}">',
                 unsafe_allow_html=True
             )
+
+    st.markdown('<div class="login-meta">Need access? Contact your administrator.</div>', unsafe_allow_html=True)
 
 
 def require_auth():
