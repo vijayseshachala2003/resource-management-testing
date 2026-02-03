@@ -1,7 +1,8 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone as tz
+import pytz
 from role_guard import setup_role_access
 
 # --- CONFIGURATION ---
@@ -102,13 +103,62 @@ for p in projects:
     project_options[p["name"]] = p["id"]
 
 # --- TODAY'S METRICS ---
-query_date = datetime.now().date()
+# Get today's date in local timezone
+local_tz = pytz.timezone("Asia/Kolkata")  # Adjust to your timezone if different
+today_local = datetime.now(local_tz).date()
+
 # Fetch recent and filter client-side
 all_approvals = authenticated_request("GET", "/admin/attendance-request-approvals/") or []
-today_str = str(query_date)
 
-today_approvals = [a for a in all_approvals if a.get('decision') == "APPROVED" and a.get('decided_at', '').startswith(today_str)]
-today_rejections = [a for a in all_approvals if a.get('decision') == "REJECTED" and a.get('decided_at', '').startswith(today_str)]
+# Filter approvals/rejections that were decided today (in local timezone)
+today_approvals = []
+today_rejections = []
+
+for a in all_approvals:
+    decision = a.get('decision')
+    decided_at_str = a.get('decided_at', '')
+    
+    if not decided_at_str:
+        continue
+    
+    try:
+        # Parse the decided_at timestamp (could be ISO format with or without timezone)
+        if 'T' in decided_at_str:
+            # Parse ISO format timestamp
+            if decided_at_str.endswith('Z'):
+                # UTC timezone
+                dt = datetime.fromisoformat(decided_at_str.replace('Z', '+00:00'))
+            elif '+' in decided_at_str or decided_at_str.count('-') > 2:
+                # Has timezone info
+                dt = datetime.fromisoformat(decided_at_str)
+            else:
+                # No timezone, assume UTC
+                dt = datetime.fromisoformat(decided_at_str)
+                dt = dt.replace(tzinfo=tz.utc)
+            
+            # Convert to local timezone and get date
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=tz.utc)
+            dt_local = dt.astimezone(local_tz)
+            decided_date = dt_local.date()
+            
+            # Compare with today's date
+            if decided_date == today_local:
+                if decision == "APPROVED":
+                    today_approvals.append(a)
+                elif decision == "REJECTED":
+                    today_rejections.append(a)
+        else:
+            # Just a date string, compare directly
+            decided_date = datetime.fromisoformat(decided_at_str.split()[0]).date()
+            if decided_date == today_local:
+                if decision == "APPROVED":
+                    today_approvals.append(a)
+                elif decision == "REJECTED":
+                    today_rejections.append(a)
+    except Exception as e:
+        # Skip invalid date formats
+        continue
 
 col_m1, col_m2, col_m3 = st.columns(3)
 col_m1.metric("Approvals Today", len(today_approvals))

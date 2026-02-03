@@ -351,31 +351,6 @@ else:
         
         except Exception as e:
             st.error(f"❌ Error reading CSV file: {str(e)}")
-    
-    # Download template
-    st.markdown("---")
-    st.markdown("### 📥 Download CSV Template")
-    
-    template_data = {
-        "user_email": ["user@example.com"],
-        "project_code": ["PROJ001"],
-        "metric_date": ["2024-01-15"],
-        "rating": ["GOOD"],
-        "quality_score": [8.5],
-        "accuracy": [95.0],
-        "critical_rate": [88.5],
-        "work_role": [""],
-        "notes": ["Example quality assessment"]
-    }
-    template_df = pd.DataFrame(template_data)
-    csv_template = template_df.to_csv(index=False).encode('utf-8')
-    
-    st.download_button(
-        label="📥 Download CSV Template",
-        data=csv_template,
-        file_name="quality_assessment_template.csv",
-        mime="text/csv"
-    )
 
 # =====================================================================
 # FOOTER

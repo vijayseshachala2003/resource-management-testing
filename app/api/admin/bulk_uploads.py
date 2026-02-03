@@ -9,7 +9,7 @@ from app.models.user_quality import UserQuality, QualityRating
 from app.models.project_members import ProjectMember
 import csv
 import io
-from datetime import datetime
+from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/admin/bulk_uploads", tags=["Admin - BulkUploads"])
 
@@ -81,7 +81,7 @@ async def bulk_upload_users(
     if not file.filename or not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Upload a valid .csv file")
 
-    content = file.file.read().decode("utf-8")
+    content = file.file.read().decode("utf-8-sig")  # utf-8-sig automatically strips BOM if present
     reader = csv.DictReader(io.StringIO(content))
     rows = list(reader)
 
@@ -182,7 +182,7 @@ async def bulk_upload_projects(
     if not file.filename or not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Upload a valid .csv file")
 
-    content = file.file.read().decode("utf-8")
+    content = file.file.read().decode("utf-8-sig")  # utf-8-sig automatically strips BOM if present
     reader = csv.DictReader(io.StringIO(content))
     rows = list(reader)
 
@@ -225,47 +225,93 @@ async def bulk_upload_projects(
     error_list = []
 
     for line_no, row in enumerate(rows, start=2):
-        # Check the size of the row: should have exactly 6 entries
-        print(len(row))
+        # Skip empty rows (rows where all fields are empty or whitespace)
+        if not row or all(not str(value).strip() if value else True for value in row.values()):
+            continue
+        
+        # Check the size of the row: should have exactly 5 entries
         if not (5 == len(row)):
             error_list.append(
-                f"Line {line_no}: 'row' should have exactly 6 values"
+                f"Line {line_no}: 'row' should have exactly 5 values"
             )
             continue
 
         # Normalize
-        code = row["code"].strip().lower()
+        code = row.get("code", "").strip().lower()
+        
+        # Skip if code is empty (empty row)
+        if not code:
+            continue
 
+        # Track validation errors for this row
+        row_errors = []
+        
         # Empty field check
         for field in PROJECT_REQUIRED_FIELDS:
             if field != "end_date" and field != "is_active" and (not row.get(field) or not row[field].strip()):
-                error_list.append(
+                row_errors.append(
                     f"Line {line_no}: '{field}' is missing or 'row' has less than 5 values"
                 )
                 break
-            if field == "end_date" and row["end_date"] and row["end_date"] > row["start_date"]:
-                error_list.append(
-                    f"Line {line_no}: 'end_date' can't be greater than 'start_date'"
+        
+        # Validate dates separately (after field checks)
+        start_date_str = row.get("start_date", "").strip() if row.get("start_date") else ""
+        end_date_str = row.get("end_date", "").strip() if row.get("end_date") else ""
+        
+        # Validate start_date format (must be YYYY-MM-DD)
+        start_date = None
+        if start_date_str:
+            try:
+                from datetime import datetime
+                start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                row_errors.append(
+                    f"Line {line_no}: Invalid 'start_date' format '{start_date_str}'. Use YYYY-MM-DD format (e.g., 2024-01-15)"
                 )
-                break
         else:
-            # Duplicate check
-            if code in codes_from_db:
-                error_list.append(
-                    f"Line {line_no}: email '{code}' already exists"
-                )
-                continue
-
-            # Create Project
-            insert_list.append(
-                Project(
-                    code=code,
-                    name=row["name"].strip(),
-                    is_active=True if row["is_active"].strip() == 'TRUE' else False,
-                    start_date=row["start_date"].strip(),
-                    end_date=None if row["end_date"].strip() == "" else row["end_date"].strip(),
-                )
+            row_errors.append(
+                f"Line {line_no}: 'start_date' is required and cannot be empty"
             )
+        
+        # Validate end_date format (can be empty, but if provided must be YYYY-MM-DD)
+        end_date = None
+        if end_date_str:
+            try:
+                from datetime import datetime
+                end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                row_errors.append(
+                    f"Line {line_no}: Invalid 'end_date' format '{end_date_str}'. Use YYYY-MM-DD format (e.g., 2024-12-31) or leave empty"
+                )
+        
+        # Validate date relationship: end_date should be >= start_date (if both are valid)
+        if start_date and end_date and end_date < start_date:
+            row_errors.append(
+                f"Line {line_no}: 'end_date' ({end_date_str}) cannot be earlier than 'start_date' ({start_date_str})"
+            )
+        
+        # If there are validation errors, add them and skip this row
+        if row_errors:
+            error_list.extend(row_errors)
+            continue
+        
+        # Duplicate check
+        if code in codes_from_db:
+            error_list.append(
+                f"Line {line_no}: Project code '{code}' already exists"
+            )
+            continue
+
+        # Create Project (use parsed date objects)
+        insert_list.append(
+            Project(
+                code=code,
+                name=row["name"].strip(),
+                is_active=True if row["is_active"].strip().upper() in ['TRUE', '1', 'YES'] else False,
+                start_date=start_date,  # Use parsed date object
+                end_date=end_date if end_date_str else None,  # Use parsed date object or None
+            )
+        )
 
     if insert_list:
         db.bulk_save_objects(insert_list)
@@ -295,7 +341,7 @@ async def bulk_upload_quality(
     if not file.filename or not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Upload a valid .csv file")
 
-    content = file.file.read().decode("utf-8")
+    content = file.file.read().decode("utf-8-sig")  # utf-8-sig automatically strips BOM if present
     reader = csv.DictReader(io.StringIO(content))
     rows = list(reader)
 
@@ -400,6 +446,10 @@ async def bulk_upload_quality(
 
             notes = row.get("notes", "").strip() or None
 
+            # Convert metric_date (date) to datetime for valid_from
+            # Use start of day (00:00:00) for the metric_date
+            valid_from_datetime = datetime.combine(metric_date, datetime.min.time())
+            
             # Archive existing current quality record
             current_quality = db.query(UserQuality).filter(
                 UserQuality.user_id == user.id,
@@ -409,7 +459,10 @@ async def bulk_upload_quality(
 
             if current_quality:
                 current_quality.is_current = False
-                current_quality.valid_to = datetime.now()
+                # Set valid_to to the end of the day before metric_date
+                # This ensures the previous record is valid up to but not including metric_date
+                prev_day = metric_date - timedelta(days=1)
+                current_quality.valid_to = datetime.combine(prev_day, datetime.max.time())
 
             # Create new quality record
             new_quality = UserQuality(
@@ -425,7 +478,7 @@ async def bulk_upload_quality(
                 assessed_by_user_id=current_user.id,
                 assessed_at=datetime.now(),
                 is_current=True,
-                valid_from=datetime.now(),
+                valid_from=valid_from_datetime,
                 valid_to=None
             )
 
