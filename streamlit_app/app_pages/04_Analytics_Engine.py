@@ -2,11 +2,18 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import date
+from role_guard import get_user_role
 
 # --- CONFIG ---
 API_URL = "http://127.0.0.1:8000"
 
 st.set_page_config(page_title="Analytics Engine", layout="wide")
+
+# Basic role check
+role = get_user_role()
+if not role or role not in ["USER", "ADMIN", "MANAGER"]:
+    st.error("Access denied. Please log in.")
+    st.stop()
 st.title("🧠 Analytics & Intelligence Engine")
 
 # --- 1. AUTH CHECK ---

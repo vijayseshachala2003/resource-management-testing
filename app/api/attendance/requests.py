@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from uuid import UUID
 from typing import List, Optional
 from datetime import datetime
@@ -14,11 +14,15 @@ from app.schemas.attendance_request import (
 )
 from app.core.dependencies import get_current_user
 from app.models.user import User
+from app.models.project_members import ProjectMember
+from app.models.project_owners import ProjectOwner
+from app.models.project import Project
+from app.services.notification_service import send_attendance_request_created_email
 
 
 router = APIRouter(
     prefix="/attendance/requests",
-    tags=["Attendance Requests"]
+    tags=["Leave/WFH Requests"]
 )
 
 # CREATE 
@@ -45,6 +49,52 @@ def create_request(
     db.add(req)
     db.commit()
     db.refresh(req)
+
+    # Notify project owners + RPM about the new request
+    recipients = {}
+
+    if user.rpm_user_id:
+        rpm_user = db.query(User).filter(User.id == user.rpm_user_id).first()
+        if rpm_user and rpm_user.email and rpm_user.id != user.id:
+            recipients[rpm_user.id] = rpm_user
+
+    member_projects = db.query(ProjectMember.project_id).filter(
+        ProjectMember.user_id == user.id,
+        ProjectMember.is_active.is_(True),
+        ProjectMember.assigned_from <= req.start_date,
+        or_(
+            ProjectMember.assigned_to.is_(None),
+            ProjectMember.assigned_to >= req.start_date,
+        ),
+    ).all()
+    project_ids = [pid for (pid,) in member_projects]
+    project_names = None
+    if project_ids:
+        project_names_list = db.query(Project.name).filter(Project.id.in_(project_ids)).all()
+        project_names = ", ".join(sorted({name for (name,) in project_names_list if name}))
+
+    if project_ids:
+        owners = db.query(User).join(
+            ProjectOwner, ProjectOwner.user_id == User.id
+        ).filter(
+            ProjectOwner.project_id.in_(project_ids),
+        ).all()
+        for owner in owners:
+            if owner.email and owner.id != user.id:
+                recipients[owner.id] = owner
+
+    for recipient in recipients.values():
+        send_attendance_request_created_email(
+            recipient_email=recipient.email,
+            recipient_name=recipient.name or recipient.email,
+            requester_name=user.name or user.email,
+            request_type=req.request_type,
+            start_date=str(req.start_date),
+            end_date=str(req.end_date),
+            reason=req.reason,
+            project_names=project_names,
+        )
+
     return req
 
 
@@ -133,7 +183,7 @@ def delete_request(
 # =====================
 admin_router = APIRouter(
     prefix="/admin/attendance-requests",
-    tags=["Admin - Attendance Requests"]
+    tags=["Admin - Leave/WFH Requests"]
 )
 
 

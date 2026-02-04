@@ -1,10 +1,13 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone as tz
+import pytz
+from role_guard import setup_role_access
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Attendance Request Approvals", layout="wide")
+setup_role_access(__file__)
 API_BASE_URL = "http://127.0.0.1:8000"
 
 # --- HELPER FUNCTIONS ---
@@ -92,7 +95,75 @@ def update_approval(approval_id, decision, comment):
 
 # --- PAGE HEADER ---
 st.title("📋 Attendance Request Approvals")
-st.markdown("Review and approve attendance requests from your team members.")
+
+# --- LOAD FILTERS ---
+projects = authenticated_request("GET", "/admin/projects") or []
+project_options = {"All Projects": None}
+for p in projects:
+    project_options[p["name"]] = p["id"]
+
+# --- TODAY'S METRICS ---
+# Get today's date in local timezone
+local_tz = pytz.timezone("Asia/Kolkata")  # Adjust to your timezone if different
+today_local = datetime.now(local_tz).date()
+
+# Fetch recent and filter client-side
+all_approvals = authenticated_request("GET", "/admin/attendance-request-approvals/") or []
+
+# Filter approvals/rejections that were decided today (in local timezone)
+today_approvals = []
+today_rejections = []
+
+for a in all_approvals:
+    decision = a.get('decision')
+    decided_at_str = a.get('decided_at', '')
+    
+    if not decided_at_str:
+        continue
+    
+    try:
+        # Parse the decided_at timestamp (could be ISO format with or without timezone)
+        if 'T' in decided_at_str:
+            # Parse ISO format timestamp
+            if decided_at_str.endswith('Z'):
+                # UTC timezone
+                dt = datetime.fromisoformat(decided_at_str.replace('Z', '+00:00'))
+            elif '+' in decided_at_str or decided_at_str.count('-') > 2:
+                # Has timezone info
+                dt = datetime.fromisoformat(decided_at_str)
+            else:
+                # No timezone, assume UTC
+                dt = datetime.fromisoformat(decided_at_str)
+                dt = dt.replace(tzinfo=tz.utc)
+            
+            # Convert to local timezone and get date
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=tz.utc)
+            dt_local = dt.astimezone(local_tz)
+            decided_date = dt_local.date()
+            
+            # Compare with today's date
+            if decided_date == today_local:
+                if decision == "APPROVED":
+                    today_approvals.append(a)
+                elif decision == "REJECTED":
+                    today_rejections.append(a)
+        else:
+            # Just a date string, compare directly
+            decided_date = datetime.fromisoformat(decided_at_str.split()[0]).date()
+            if decided_date == today_local:
+                if decision == "APPROVED":
+                    today_approvals.append(a)
+                elif decision == "REJECTED":
+                    today_rejections.append(a)
+    except Exception as e:
+        # Skip invalid date formats
+        continue
+
+col_m1, col_m2, col_m3 = st.columns(3)
+col_m1.metric("Approvals Today", len(today_approvals))
+col_m2.metric("Rejections Today", len(today_rejections))
+
 st.markdown("---")
 
 # --- TABS ---
@@ -105,19 +176,36 @@ with tab1:
     st.subheader("Pending Attendance Requests")
     
     # Filters Row
-    col_filter, col_refresh = st.columns([3, 1])
-    with col_filter:
-        filter_type = st.selectbox(
-            "Filter by Request Type", 
-            ["All", "LEAVE", "WFH", "REGULARIZATION", "SHIFT_CHANGE", "OTHER"],
-            key="pending_filter"
-        )
-    with col_refresh:
-        st.write("")  # Spacer
-        if st.button("🔄 Refresh", key="refresh_pending"):
-            st.rerun()
+    f_col1, f_col2, f_col3, f_col4 = st.columns([1.5, 1.5, 1, 1])
+    with f_col1:
+        selected_project_name = st.selectbox("Filter Project", list(project_options.keys()), key="pending_project_filter")
+        selected_project_id = project_options[selected_project_name]
     
-    pending = get_pending_requests(request_type=filter_type if filter_type != "All" else None)
+    with f_col2:
+        filter_type = st.selectbox(
+            "Filter Type", 
+            ["All", "SICK_LEAVE", "WFH", "REGULARIZATION", "SHIFT_CHANGE", "OTHER"],
+            key="pending_type_filter"
+        )
+    
+    with f_col3:
+        date_from = st.date_input("From", value=None, key="pending_date_from")
+    
+    with f_col4:
+        date_to = st.date_input("To", value=None, key="pending_date_to")
+
+    # Fetch all pending
+    pending = authenticated_request("GET", "/admin/attendance-requests/", params={"status": "PENDING"}) or []
+    
+    # Client-side filtering
+    if filter_type != "All":
+        pending = [r for r in pending if r.get('request_type') == filter_type]
+    if selected_project_id:
+        pending = [r for r in pending if r.get('project_id') == str(selected_project_id)]
+    if date_from:
+        pending = [r for r in pending if r.get('start_date') >= str(date_from)]
+    if date_to:
+        pending = [r for r in pending if r.get('end_date') <= str(date_to)]
     
     if not pending:
         st.success("🎉 All caught up! No pending requests to approve.")
@@ -127,20 +215,20 @@ with tab1:
         for req in pending:
             with st.container(border=True):
                 # Layout with user info
-                col_user, col_info, col_dates, col_actions = st.columns([2, 2, 2, 1])
+                col_user, col_info, col_dates, col_actions = st.columns([2, 2, 2, 1.5])
                 
                 with col_user:
                     user_name = req.get('user_name', 'Unknown')
-                    user_id = req.get('user_id', 'N/A')
+                    user_id = req.get('user_id') or 'N/A'
                     st.markdown(f"### 👤 {user_name}")
-                    st.caption(f"User ID: `{user_id[:8]}...`")
+                    st.caption(f"User ID: `{str(user_id)[:8]}...`")
                     if req.get('user_email'):
                         st.caption(f"📧 {req['user_email']}")
                 
                 with col_info:
-                    request_type = req.get('request_type', 'LEAVE')
+                    request_type = req.get('request_type', 'SICK_LEAVE')
                     type_emoji = {
-                        'LEAVE': '🏖️',
+                        'SICK_LEAVE': '🏖️',
                         'WFH': '🏠',
                         'REGULARIZATION': '📝',
                         'SHIFT_CHANGE': '🔄',
@@ -185,23 +273,40 @@ with tab2:
     st.subheader("Approval History")
     
     # Filters
-    col_filter1, col_filter2, col_refresh = st.columns([2, 2, 1])
-    with col_filter1:
-        filter_decision = st.selectbox("Filter by Decision", ["All", "APPROVED", "REJECTED"])
-    with col_filter2:
+    h_col1, h_col2, h_col3, h_col4 = st.columns([1.5, 1.5, 1, 1])
+    with h_col1:
+        filter_decision = st.selectbox("Status", ["All", "APPROVED", "REJECTED"], key="history_decision_filter")
+    with h_col2:
         filter_req_type = st.selectbox(
-            "Filter by Request Type", 
-            ["All", "LEAVE", "WFH", "REGULARIZATION", "SHIFT_CHANGE", "OTHER"],
+            "Request Type", 
+            ["All", "SICK_LEAVE", "WFH", "REGULARIZATION", "SHIFT_CHANGE", "OTHER"],
             key="history_type_filter"
         )
-    with col_refresh:
-        st.write("")
-        if st.button("🔄 Refresh", key="refresh_history"):
-            st.rerun()
+    with h_col3:
+        h_date_from = st.date_input("From", value=None, key="history_date_from")
+    with h_col4:
+        h_date_to = st.date_input("To", value=None, key="history_date_to")
     
-    # Get history and related request info
-    history = get_approval_history()
+    # Fetch all history (use limit if available)
+    history = authenticated_request("GET", "/admin/attendance-request-approvals/", params={"limit": 100}) or []
+    
+    # Client-side filtering
+    if filter_decision != "All":
+        history = [h for h in history if h.get('decision') == filter_decision]
+    if h_date_from:
+        history = [h for h in history if h.get('decided_at', '') >= str(h_date_from)]
+    if h_date_to:
+        # Simple string compare for dates in ISO timestamps
+        history = [h for h in history if h.get('decided_at', '') <= str(h_date_to) + " 23:59:59"]
     all_requests = get_all_requests()
+    
+    # Fetch all users to create approver lookup
+    all_users = authenticated_request("GET", "/admin/users/", params={"limit": 1000}) or []
+    approver_lookup = {}
+    for user in all_users:
+        user_id = user.get('id')
+        if user_id:
+            approver_lookup[str(user_id)] = user.get('name', 'Unknown')
     
     if not history:
         st.info("No approval history found.")
@@ -214,7 +319,9 @@ with tab2:
                     'user_name': req.get('user_name', 'Unknown'),
                     'user_id': req.get('user_id'),
                     'request_type': req.get('request_type'),
-                    'reason': req.get('reason')
+                    'reason': req.get('reason'),
+                    'start_date': req.get('start_date', 'N/A'),
+                    'end_date': req.get('end_date', 'N/A')
                 }
         
         # Enrich history with request info
@@ -227,11 +334,20 @@ with tab2:
             if filter_req_type != "All" and req_info.get('request_type') != filter_req_type:
                 continue
             
+            # Get approver name
+            approver_user_id = h.get('approver_user_id')
+            approver_name = 'Unknown'
+            if approver_user_id:
+                approver_name = approver_lookup.get(str(approver_user_id), 'Unknown')
+            
             enriched_history.append({
                 'decision': h.get('decision'),
                 'user_name': req_info.get('user_name', 'Unknown'),
                 'user_id': str(req_info.get('user_id', 'N/A'))[:8] + '...',
                 'request_type': req_info.get('request_type', 'N/A'),
+                'start_date': req_info.get('start_date', 'N/A'),
+                'end_date': req_info.get('end_date', 'N/A'),
+                'approver_name': approver_name,
                 'comment': h.get('comment'),
                 'decided_at': h.get('decided_at', '')[:19],  # Truncate timestamp
                 'approval_id': str(h.get('id', ''))[:8] + '...',
@@ -243,7 +359,7 @@ with tab2:
         
         if enriched_history:
             df = pd.DataFrame(enriched_history)
-            df.columns = ['Decision', 'Requester Name', 'User ID', 'Request Type', 'Comment', 'Decided At', 'Approval ID']
+            df.columns = ['Decision', 'Requester Name', 'User ID', 'Request Type', 'From Date', 'To Date', 'Approved By', 'Comment', 'Decided At', 'Approval ID']
             
             # Add status color
             def color_decision(val):
@@ -254,7 +370,7 @@ with tab2:
                 return ''
             
             st.dataframe(
-                df.style.applymap(color_decision, subset=['Decision']),
+                df.style.map(color_decision, subset=['Decision']),
                 use_container_width=True,
                 hide_index=True
             )
@@ -312,19 +428,19 @@ with tab3:
                     st.warning("Please enter an Approval ID and confirm deletion")
 
 
-# --- SIDEBAR INFO ---
-with st.sidebar:
-    st.markdown("### ℹ️ About This Page")
-    st.markdown("""
-    **Attendance Request Approvals** allows managers to:
+# # --- SIDEBAR INFO ---
+# with st.sidebar:
+#     st.markdown("### ℹ️ About This Page")
+#     st.markdown("""
+#     **Attendance Request Approvals** allows managers to:
     
-    - 📥 View and approve pending requests
-    - 📜 See approval history with filters
-    - ⚙️ Manage (update/delete) approvals
+#     - 📥 View and approve pending requests
+#     - 📜 See approval history with filters
+#     - ⚙️ Manage (update/delete) approvals
     
-    ---
+#     ---
     
-    **Filters Available:**
-    - Request Type (LEAVE, WFH, etc.)
-    - Decision (APPROVED, REJECTED)
-    """)
+#     **Filters Available:**
+#     - Request Type (LEAVE, WFH, etc.)
+#     - Decision (APPROVED, REJECTED)
+#     """)

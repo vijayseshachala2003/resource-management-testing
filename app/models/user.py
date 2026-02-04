@@ -1,6 +1,6 @@
 import uuid
 from sqlalchemy import Column, String, Boolean, Date, DateTime, Enum
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.sql import func
 from app.db.base import Base
 import enum
@@ -8,11 +8,21 @@ import enum
 # 👇 Python enum matching Postgres enum
 class UserRole(enum.Enum):
     ADMIN = "ADMIN"
+    MANAGER = "MANAGER"
     USER = "USER"
 
 class WorkRole(enum.Enum):
     CONTRACTOR = "CONTRACTOR"
     EMPLOYEE = "EMPLOYEE"
+
+class WeekoffDays(enum.Enum):
+    SUNDAY = "SUNDAY"
+    MONDAY = "MONDAY"
+    TUESDAY = "TUESDAY"
+    WEDNESDAY = "WEDNESDAY"
+    THURSDAY = "THURSDAY"
+    FRIDAY = "FRIDAY"
+    SATURDAY = "SATURDAY"
 
 class User(Base):
     __tablename__ = "users"
@@ -34,6 +44,8 @@ class User(Base):
     quality_rating = Column(String, nullable=True)
     rpm_user_id = Column(UUID(as_uuid=True), nullable=True)
     soul_id = Column(UUID(as_uuid=True), nullable=True)
+    # Array of weekoff days enum - supports multiple weekoffs
+    weekoffs = Column(ARRAY(Enum(WeekoffDays, name="weekoff_days", create_type=False)), nullable=True, default=[WeekoffDays.SUNDAY])
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(

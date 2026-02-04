@@ -7,6 +7,7 @@ from typing import Optional
 class ClockInRequest(BaseModel):
     project_id: UUID
     work_role: str  # Must match your Enum (e.g., "ANNOTATION")
+    clock_in_at: Optional[datetime] = None
 
 # 2. Clock Out Request
 class ClockOutRequest(BaseModel):
@@ -39,3 +40,17 @@ class TimeHistoryResponse(BaseModel):
 class ApprovalRequest(BaseModel):
     status: str  # Must be "APPROVED" or "REJECTED"
     approval_comment: Optional[str] = None
+
+class UserProductivityResponse(BaseModel):
+    id: UUID
+    user_id: UUID
+    project_id: UUID
+    work_role: str
+    metric_date: date
+    hours_worked: float
+    tasks_completed: int
+    productivity_score: Optional[float] = None
+    notes: Optional[str] = None
+
+    class Config:
+        from_attributes = True

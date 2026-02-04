@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 from datetime import date, datetime
+# Role guard imported later after page config
 
 # ---------------------------------------------------------
 # HELPER: FORMAT DURATION HH:MM:SS
@@ -42,6 +43,13 @@ def calculate_hours_worked(clock_in, clock_out, minutes_worked):
 # PAGE CONFIG
 # ---------------------------------------------------------
 st.set_page_config(page_title="Attendance Daily", layout="wide")
+
+# Basic role check
+from role_guard import get_user_role
+role = get_user_role()
+if not role or role not in ["USER", "ADMIN", "MANAGER"]:
+    st.error("Access denied. Please log in.")
+    st.stop()
 
 API_BASE_URL = "http://127.0.0.1:8000"
 
@@ -99,7 +107,9 @@ def authenticated_request(method, endpoint, data=None, params=None):
 
     if not token:
         st.warning("🔒 Please login first from the App page.")
-        st.page_link("app.py", label="➡️ Go to App → Login")
+        if st.button("➡️ Go to App → Login"):
+            st.session_state.clear()
+            st.rerun()
         st.stop()
 
     return api_request(

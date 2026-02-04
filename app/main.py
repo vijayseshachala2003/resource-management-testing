@@ -21,9 +21,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from app.api import auth
+
 app.include_router(users.router)
 app.include_router(projects.router)
-# app.include_router(auth.router)
+app.include_router(auth.router)
 app.include_router(projects_daily.router)
 
 from app.api.time import history
@@ -62,9 +64,31 @@ app.include_router(attendance_request_approvals.router)
 app.include_router(analytics.router)
 app.include_router(reports.router)
 
+from app.api.project_manager import project_manager
+app.include_router(project_manager.router)
+
 from app.api.admin import router as admin_router
 from app.api.admin import role_drilldown
 
 app.include_router(admin_router)
 app.include_router(role_drilldown.router)
 
+# Start scheduler for automatic calculations
+from app.services.scheduler_service import start_scheduler
+
+@app.on_event("startup")
+async def startup_event():
+    """Start the scheduler when the application starts"""
+    try:
+        start_scheduler()
+    except Exception as e:
+        print(f"Warning: Could not start scheduler: {e}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Stop the scheduler when the application shuts down"""
+    from app.services.scheduler_service import stop_scheduler
+    try:
+        stop_scheduler()
+    except Exception as e:
+        print(f"Warning: Could not stop scheduler: {e}")

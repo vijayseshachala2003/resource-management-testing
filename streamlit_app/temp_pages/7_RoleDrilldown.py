@@ -2,8 +2,10 @@ import streamlit as st
 import pandas as pd
 from api import api_request
 from datetime import date
+from role_guard import setup_role_access
 
 st.set_page_config(page_title="Role Drilldown", layout="wide")
+setup_role_access(__file__)
 
 st.title("Role Drilldown Report")
 st.caption("Project → Role → Attendance breakdown")

@@ -12,12 +12,12 @@ class AttendanceApprovalDecision(str, Enum):
 
 class AttendanceRequestApprovalBase(BaseModel):
     request_id: UUID
-    approver_user_id: UUID
     decision: AttendanceApprovalDecision
     comment: Optional[str] = None
 
 
 class AttendanceRequestApprovalCreate(AttendanceRequestApprovalBase):
+    approver_user_id: Optional[UUID] = None
     decided_at: Optional[datetime] = None
 
 
@@ -28,6 +28,7 @@ class AttendanceRequestApprovalUpdate(BaseModel):
 
 class AttendanceRequestApprovalResponse(AttendanceRequestApprovalBase):
     id: UUID
+    approver_user_id: UUID
     decided_at: datetime
     created_at: datetime
     updated_at: datetime
